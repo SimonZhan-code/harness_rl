@@ -1,0 +1,19 @@
+# Example Step 1 probe config (consumed on vast.ai; documents the knobs).
+model: google/gemma-4-12b-it          # verify exact HF id; served via vLLM
+base_url: http://localhost:8000/v1    # vLLM OpenAI-compatible endpoint
+benchmark: terminal_bench_2           # terminal_bench_2 | swebench_pro | gamedev
+n_tasks: 25
+long_horizon: true                    # prefer high horizon_hint tasks
+gammas:
+  - G0_truncate
+  - G1_retrieval
+  - G2_summarize
+  - G3_structured_memory
+budget:
+  max_turns: 40
+  context_window: 32000               # W: the finite window Γ must fit into
+gamma_kwargs:
+  G1_retrieval: {recency_turns: 6, retrieve_k: 4}
+  G2_summarize: {recency_turns: 6, compact_every: 4}
+  G3_structured_memory: {recency_turns: 4}
+out_dir: ./runs

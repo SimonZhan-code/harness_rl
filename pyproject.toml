@@ -1,0 +1,33 @@
+[project]
+name = "harness-rl"
+version = "0.0.1"
+description = "Co-evolving context-management (Gamma) with an RL-tuned policy on long-horizon coding."
+requires-python = ">=3.11"
+# .venv (Step 1 orchestration) dependencies ONLY — GPU-free.
+# Heavy training/serving deps (torch, vllm, skyrl, flash-attn) live in the Docker image.
+dependencies = [
+    "litellm>=1.40",      # uniform OpenAI-compatible client (open + closed models)
+    "datasets>=2.19",     # SWE-bench-PRO task metadata from HF
+    "pyyaml>=6.0",        # Terminal-Bench task.yaml
+    "tiktoken>=0.7",      # token counting (optional; falls back to heuristic)
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5", "mypy>=1.10"]
+
+[project.scripts]
+hrl-probe = "harness_rl.eval.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["harness_rl*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
