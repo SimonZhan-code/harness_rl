@@ -26,11 +26,13 @@ harness_rl/
 
 ## Environments (dual)
 
-- **`.venv` — Step 1 orchestration (GPU-free):** `bash scripts/setup_venv.sh`
-- **Docker — Step 2 training (vast.ai/GPU):** `bash scripts/build_image.sh` (deferred)
+- **`.venv` (CPU) — orchestration / local no-GPU checks:** `bash scripts/setup_venv.sh`
+- **`.venv-gpu` — GPU inference (SGLang):** `bash scripts/setup_gpu_venv.sh`
+- **Docker — Step 2 training:** `bash scripts/build_image.sh`
 
-> **Status:** implementation/code only. **No env build or GPU run yet** — deferred to a
-> vast.ai instance for environment testing and validation.
+Both GPU paths share `scripts/install_gpu_deps.sh` (single source of truth). **GPU requirement:
+NVIDIA driver ≥ 560** — latest SGLang pulls `torch 2.7.1+cu126` (CUDA 12.6). Validated on an
+A100 (driver 570.133.20): SGLang serves + the harness drives multi-turn inference end-to-end.
 
 ## Local (no-GPU) checks
 
