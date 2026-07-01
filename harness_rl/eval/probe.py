@@ -5,9 +5,9 @@ J(theta0, Gamma_i) = mean u_g, plus the spread max_i - min_i. A non-trivial spre
 long-horizon tasks is the GO signal for Step 2; a negligible spread is the NO-GO that
 says rescope.
 
-Fully GPU-free: pass any `ModelClient` (a real vLLM/API client on vast, or a `StubModel`
-locally). The heavy Docker envs only start if you pass a Docker-backed benchmark on a
-host with Docker; otherwise pass `EnvStub`-backed tasks for a dry run.
+Fully GPU-free: pass any `ModelClient` (an SGLang-served open model or a closed API model
+on vast, or a `StubModel` locally). The heavy Docker envs only start if you pass a
+Docker-backed benchmark on a host with Docker; otherwise pass `EnvStub`-backed tasks.
 """
 from __future__ import annotations
 

@@ -10,12 +10,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /workspace
 
-# GPU stack (pin on vast). slime uses SGLang for rollouts.
+# GPU stack (pin on vast). Local inference: SGLang primary, vLLM backup. slime rolls out via SGLang.
 RUN pip3 install --no-cache-dir \
     "torch>=2.4" \
     "transformers>=5.5" \
     "sglang>=0.4" \
     "flash-attn>=2.6" --no-build-isolation || true
+# vLLM backup local-inference backend (optional; used only if SGLang can't serve a model).
+RUN pip3 install --no-cache-dir "vllm>=0.6" || true
 
 # slime (THUDM). Pin to a known-good commit on vast. FSDP backend via SLIME_BACKEND=fsdp.
 RUN pip3 install --no-cache-dir "git+https://github.com/THUDM/slime.git" || true

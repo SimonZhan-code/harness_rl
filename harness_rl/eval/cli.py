@@ -3,8 +3,8 @@
 Two modes:
   --stub        : no-GPU dry run. Uses a canned StubModel + EnvStub tasks so the whole
                   harness→gamma→logging path runs offline (for local validation).
-  (default)     : real run. Point --base-url at a vLLM server (open model) or use a vendor
-                  model id via LiteLLM (closed). Runs on vast.ai / a GPU host.
+  (default)     : real run. Point --base-url at an SGLang server (open model) or omit it and
+                  pass a vendor model id via LiteLLM (closed). Runs on vast.ai / a GPU host.
 """
 from __future__ import annotations
 
@@ -28,7 +28,8 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="hrl-probe")
     p.add_argument("--benchmark", default="terminal_bench_2")
     p.add_argument("--model", default="google/gemma-4-12b-it")
-    p.add_argument("--base-url", default=None, help="vLLM/OpenAI-compatible endpoint")
+    p.add_argument("--base-url", default=None,
+                   help="SGLang OpenAI-compatible endpoint (open models); omit for closed API models")
     p.add_argument("--gammas", nargs="+",
                    default=["G0_truncate", "G1_retrieval", "G2_summarize", "G3_structured_memory"])
     p.add_argument("--n-tasks", type=int, default=25)
@@ -60,7 +61,11 @@ def main() -> None:
     else:
         from harness_rl.benchmarks import make_benchmark
 
-        model = ModelClient(model=args.model, base_url=args.base_url)
+        # Open model → SGLang server behind --base-url; closed model → vendor API (no base_url).
+        if args.base_url:
+            model = ModelClient.for_sglang(served_model=args.model, base_url=args.base_url)
+        else:
+            model = ModelClient(model=args.model)
         bench = make_benchmark(args.benchmark)
         probe = GammaProbe(model, bench, args.gammas, out_dir=args.out_dir)
         res = probe.run(n_tasks=args.n_tasks, long_horizon=True)

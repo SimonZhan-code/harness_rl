@@ -1,6 +1,6 @@
 # Example Step 1 probe config (consumed on vast.ai; documents the knobs).
-model: google/gemma-4-12b-it          # verify exact HF id; served via vLLM
-base_url: http://localhost:8000/v1    # vLLM OpenAI-compatible endpoint
+model: google/gemma-4-12b-it          # verify exact HF id; served via SGLang
+base_url: http://localhost:30000/v1   # SGLang OpenAI-compatible endpoint (default port 30000)
 benchmark: terminal_bench_2           # terminal_bench_2 | swebench_pro | gamedev
 n_tasks: 25
 long_horizon: true                    # prefer high horizon_hint tasks

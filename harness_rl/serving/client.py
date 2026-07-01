@@ -2,7 +2,9 @@
 
 The harness talks to the policy ONLY through this client, which wraps an
 OpenAI-compatible `chat/completions` endpoint. Swapping `base_url` is the ONLY change
-between Step 1 (vLLM / vendor API) and Step 2 (SkyRL-served policy). No GPU deps here.
+between Step 1 and Step 2. **Local (open-model) inference uses SGLang primary, vLLM backup**
+(both serve OpenAI-compatible endpoints; Step 2 slime rollouts serve via SGLang). **Closed
+models** go through the vendor API as-is (whatever inference the provider uses). No GPU deps here.
 
 `StubModel` is an in-process fake used for local (no-GPU) seam/unit tests: it returns
 canned actions so the whole harness → gamma → logging path can be exercised offline.
@@ -31,8 +33,9 @@ class ModelClient:
     """Thin wrapper over LiteLLM (uniform OpenAI-compatible layer).
 
     LiteLLM is imported lazily so importing this module needs no network/model deps.
-    For open models point `base_url` at a vLLM/SGLang server; for closed models use the
-    vendor model id and set the api key via env.
+    For open models, serve locally with **SGLang** (primary) or **vLLM** (backup) and use
+    `ModelClient.for_sglang(...)` / `.for_vllm(...)`; for closed models pass the vendor model
+    id (e.g. `gpt-5.5`, `gemini/gemini-3.5-flash`) with the api key set via env.
     """
 
     def __init__(
@@ -50,6 +53,29 @@ class ModelClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.extra = extra or {}
+
+    @classmethod
+    def _for_openai_server(cls, served_model: str, base_url: str, api_key: str,
+                           **kwargs: Any) -> "ModelClient":
+        """Client for any self-hosted OpenAI-compatible server (SGLang / vLLM).
+
+        LiteLLM routes to a local server when the model is prefixed `openai/` and `base_url`
+        points at it. `api_key` is a placeholder unless the server was launched with one.
+        """
+        model = served_model if served_model.startswith("openai/") else f"openai/{served_model}"
+        return cls(model=model, base_url=base_url, api_key=api_key, **kwargs)
+
+    @classmethod
+    def for_sglang(cls, served_model: str, base_url: str = "http://localhost:30000/v1",
+                   api_key: str = "local", **kwargs: Any) -> "ModelClient":
+        """PRIMARY local backend. SGLang default OpenAI-compatible port is 30000."""
+        return cls._for_openai_server(served_model, base_url, api_key, **kwargs)
+
+    @classmethod
+    def for_vllm(cls, served_model: str, base_url: str = "http://localhost:8000/v1",
+                 api_key: str = "local", **kwargs: Any) -> "ModelClient":
+        """BACKUP local backend. vLLM default OpenAI-compatible port is 8000."""
+        return cls._for_openai_server(served_model, base_url, api_key, **kwargs)
 
     def chat(self, messages: list[Message]) -> ChatResult:
         import litellm  # lazy

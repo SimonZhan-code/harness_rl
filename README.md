@@ -42,11 +42,14 @@ python -m harness_rl.eval.cli --stub   # dry-run the probe pipeline end-to-end, 
 
 ## Step 1 — Γ variance probe (the GO/NO-GO gate)
 
-On vast, point a served model at the probe and sweep Γ:
+**Local inference: SGLang (primary), vLLM (backup)** — Step 1 and Step 2 serve the policy the
+same way; closed models use the provider's own inference via the API. On vast, serve, then
+sweep Γ:
 
 ```bash
+bash scripts/serve_sglang.sh google/gemma-4-12b-it 30000    # primary (vLLM backup: scripts/serve_vllm.sh)
 hrl-probe --benchmark terminal_bench_2 --model google/gemma-4-12b-it \
-          --base-url http://localhost:8000/v1 \
+          --base-url http://localhost:30000/v1 \
           --gammas G0_truncate G1_retrieval G2_summarize G3_structured_memory --n-tasks 25
 ```
 

@@ -40,14 +40,15 @@ The single design decision that makes Step 1 / Step 2 separable:
 > `chat/completions` `base_url`.** $\Gamma$ is a module *inside* the harness that builds
 > the message list; the model is a black box behind `base_url`.
 
-- **Step 1:** `base_url` → a local **vLLM/SGLang** server (open models) *or* a vendor API
-  (closed models, via LiteLLM).
-- **Step 2:** `base_url` → the **RL framework's inference engine** (SkyRL/slime serve the
-  policy over an OpenAI-compatible endpoint during rollouts).
+- **Step 1:** `base_url` → a local **SGLang** server (primary; **vLLM** backup) for open
+  models, *or* a vendor API for closed models (via LiteLLM — provider's own inference, as-is).
+- **Step 2:** `base_url` → **slime's SGLang** inference engine serving the policy over an
+  OpenAI-compatible endpoint during rollouts.
 
-Both SkyRL and slime already drive external agents through an OpenAI-compatible endpoint,
-so **the exact same harness + $\Gamma$ + logging code is reused unchanged**; only the
-`base_url` (and a reward hook) differ. This is the enforced separation.
+slime drives the external agent through an OpenAI-compatible endpoint, so **the exact same
+harness + $\Gamma$ + logging code is reused unchanged**; only the `base_url` (and a reward
+hook) differ. This is the enforced separation. **Local inference standardizes on SGLang**
+(vLLM backup) so Step 1 and Step 2 serve identically.
 
 ---
 
@@ -56,9 +57,9 @@ so **the exact same harness + $\Gamma$ + logging code is reused unchanged**; onl
 Two environments, matching the Step 1 / Step 2 seam:
 
 - **`.venv` — local inference / orchestration (Step 1).** A Python virtualenv holding the
-  harness, `gamma/`, benchmark adapters, serving *clients* (LiteLLM + vLLM/SGLang client),
-  logging, and the eval runner. Drives closed-model APIs and open-model endpoints. This is
-  the layer run locally.
+  harness, `gamma/`, benchmark adapters, serving *clients* (LiteLLM → SGLang/vLLM local
+  servers + closed APIs), logging, and the eval runner. GPU-free; the SGLang/vLLM *servers*
+  run on the GPU host. This is the layer run locally.
 - **Docker — training launch + GPU serving (Step 2).** A pinned CUDA/torch image for
   **SkyRL + FSDP + vLLM** (the RL training launch). Provide a `Dockerfile` +
   `scripts/build_image.sh`. Keep GPU-heavy deps (torch-cuda, vllm, skyrl, flash-attn) in the
@@ -153,8 +154,9 @@ Step 2. Two size bands: **~4B** (fast iteration) and **~12–14B** (headline).
 
 ### Closed (API, inference-only eval + grounded-judge reference $\pi_{\text{ref}}$)
 
-Call via **LiteLLM** (uniform OpenAI-compatible layer). **Verify current model IDs at
-implementation time** — the following were current as of research (July 2026):
+Call via **LiteLLM** (uniform OpenAI-compatible layer). Closed models use the **provider's
+own inference** as-is — no local serving, whatever backend the vendor runs is fine. **Verify
+current model IDs at implementation time** — the following were current as of research (July 2026):
 `openai/gpt-5.5` (`gpt-5.5-pro`) · `anthropic/claude-sonnet-5` (`claude-opus-4-8`) ·
 `gemini/gemini-3.5-flash` (`gemini-3.1-pro`). Gemini doubles as the **transfer target**
 (Gemma→Gemini portability) and the **strong reference executor** for the grounded judge.
@@ -179,7 +181,8 @@ coding. Build the reusable rollout+logging+verifier infra.
 2. `gamma/` — `G0_truncate`, `G1_retrieval`, `G2_summarize`, `G3_structured_memory`.
 3. `benchmarks/` — thin adapters (uniform `run_task`, `verify(task, final_state)->[0,1]`)
    for Terminal-Bench-2, SWE-bench-PRO, GameDevBench, WebGameBench.
-4. `serving/` — vLLM/SGLang launch scripts for open models; LiteLLM config for closed.
+4. `serving/` — SGLang (primary) / vLLM (backup) launch scripts for open models;
+   LiteLLM for closed (provider inference as-is). `ModelClient.for_sglang/.for_vllm`.
 5. `logging/` — **step-segmented trace schema** (see below).
 6. `eval/` — runner over a 20–30 task subset per bench; computes $J(\theta_0,\Gamma_i)$.
 
@@ -270,7 +273,7 @@ harness-rl/
   `u_g` populate end-to-end (no real model, no GPU).
 
 **On vast.ai (deferred) — GPU / full runs:**
-- Step 1: full 20–30 subset × {G0..G3} on Gemma-4-12B via vLLM → the $\Gamma$-spread table;
+- Step 1: full 20–30 subset × {G0..G3} on Gemma-4-12B via SGLang → the $\Gamma$-spread table;
   sanity: `G0_truncate` underperforms on the longest-horizon tasks.
 - Step 2: overfit-one-task (RL drives a single Terminal-Bench task to Pass@1); then a small
   full-parameter GRPO run on a task cluster; verify reward curve rises and retention eval

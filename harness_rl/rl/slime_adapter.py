@@ -42,8 +42,8 @@ def build_generate_fn(
     trajectory + reward slime needs for GRPO.
     """
     adapter = make_benchmark(benchmark)
-    # The policy under training is served by slime (SGLang) at `served_base_url`.
-    model = ModelClient(model=model_name, base_url=served_base_url)
+    # The policy under training is served by slime via SGLang (OpenAI-compatible) at `served_base_url`.
+    model = ModelClient.for_sglang(served_model=model_name, base_url=served_base_url)
     runner = HarnessRollout(
         adapter,
         HarnessRolloutConfig(benchmark=benchmark, gamma_variant=gamma_variant,
