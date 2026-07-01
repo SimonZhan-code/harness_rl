@@ -15,7 +15,14 @@ PIP="${PIP:-pip}"
 SGLANG_SPEC="${SGLANG_SPEC:-sglang[all]}"     # default: latest (Gemma-4 / Qwen3.5 capable, driver>=580)
 
 $PIP install --upgrade pip
-$PIP install "$SGLANG_SPEC"                   # PRIMARY backend; brings matching torch + transformers>=5.5
+$PIP install "$SGLANG_SPEC"                   # PRIMARY backend; brings matching torch + transformers
+
+# Gemma-4 (`gemma4_unified`) needs transformers >= 5.12 — NEWER than sglang 0.5.14's pin (5.8.1).
+# Overriding the pin works at runtime (validated: served Gemma-4-12B + Qwen3.5-9B on driver 595,
+# host-native benchmark inference PASS on all four). Skip with SKIP_TF_UPGRADE=1 if not using Gemma-4.
+if [ "${SKIP_TF_UPGRADE:-0}" != "1" ]; then
+  $PIP install -U "transformers>=5.12"
+fi
 
 # vLLM (backup) pins torch/flashinfer differently — install in a SEPARATE venv only:
 #   WITH_VLLM=1 PIP=pip bash scripts/install_gpu_deps.sh
