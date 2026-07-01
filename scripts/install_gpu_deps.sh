@@ -2,21 +2,25 @@
 # Shared GPU inference-deps installer — used by BOTH scripts/setup_gpu_venv.sh (.venv build)
 # and the Dockerfile (single source of truth for the GPU stack).
 #
-# DRIVER REQUIREMENT: latest SGLang pulls torch 2.7.1+cu126 (CUDA 12.6), which REQUIRES
-# NVIDIA driver >= 560. (We dropped the driver-550.163.01 / cu124 target because the newest
-# models — Gemma 4, Qwen 3.5 — need a recent SGLang, and recent SGLang forces cu126.)
-# Validated on an A100 with driver 570.133.20.
+# DRIVER REQUIREMENT: NVIDIA driver >= 580 (CUDA 13).
+#   The newest models (Gemma-4 `gemma4_unified`, Qwen3.5) need transformers >= 5.5, which
+#   only ships in SGLang >= 0.5.11 — and every SGLang >= 0.5.11 pins torch 2.11.0+cu130
+#   (CUDA 13), requiring driver >= 580. Verified: on driver 570 the CUDA-13 torch fails
+#   ("driver too old"). Qwen3-14B (older stack) works on 560–579, but Gemma-4 / Qwen3.5 do NOT.
+#
+#   Older-driver fallback (560–579, cu126): `SGLANG_SPEC='sglang[all]<0.5.11' bash <this>`
+#   — gets you Qwen3/Qwen2.5 etc. but NOT Gemma-4 or Qwen3.5.
 set -euo pipefail
 PIP="${PIP:-pip}"
+SGLANG_SPEC="${SGLANG_SPEC:-sglang[all]}"     # default: latest (Gemma-4 / Qwen3.5 capable, driver>=580)
 
 $PIP install --upgrade pip
-# PRIMARY local inference backend. sglang[all] brings a matching torch 2.7.x+cu126 + sgl-kernel + flashinfer.
-$PIP install "sglang[all]>=0.4.10"
+$PIP install "$SGLANG_SPEC"                   # PRIMARY backend; brings matching torch + transformers>=5.5
 
-# BACKUP backend (vLLM) — pins torch/flashinfer differently; install in a SEPARATE venv only:
+# vLLM (backup) pins torch/flashinfer differently — install in a SEPARATE venv only:
 #   WITH_VLLM=1 PIP=pip bash scripts/install_gpu_deps.sh
 if [ "${WITH_VLLM:-0}" = "1" ]; then
-  $PIP install "vllm>=0.8"
+  $PIP install "vllm"
 fi
 
-python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'gpu_avail', torch.cuda.is_available())"
+python -c "import torch,transformers; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'transformers', transformers.__version__, 'gpu_avail', torch.cuda.is_available())"

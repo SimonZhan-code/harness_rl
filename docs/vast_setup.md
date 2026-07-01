@@ -1,18 +1,28 @@
-# Vast.ai setup — Docker-capable GPU instance
+# Vast.ai setup — GPU instance
 
-How to launch an instance that can run **both** model inference (SGLang) **and** the
-benchmark Docker sandboxes (Terminal-Bench / SWE-bench-PRO / GameDevBench).
+**Default path = host-native (no Docker):** a *plain* GPU box runs model inference (SGLang)
++ the harness driving each benchmark's tasks on a real host shell (`--env-mode local`). No
+privileged/Docker needed. Containers can't run on standard vast instances anyway (unprivileged
+→ nested-namespace clone blocked; Docker *and* rootless Podman both fail), so host-native is
+the norm. Docker/privileged is ONLY needed for the *graded* benchmark verifiers (deferred).
 
 ## Requirements
 
 | Need | Value | Why |
 |---|---|---|
-| VRAM | **≥ 40 GB** (single GPU) | 12–14B models in bf16 (~24–28 GB) + KV cache |
-| Arch | **Ampere or newer** (A100 / A6000 / L40 / H100) | real **bf16** (avoid Turing "Q RTX 8000") |
-| CUDA / driver | **CUDA ≥ 12.6 → driver ≥ 560** | latest SGLang → `torch 2.7.1+cu126` |
-| Disk | **≥ 120 GB** | venv (~8 GB) + model weights + benchmark images |
+| VRAM | **≥ 40 GB** (single GPU) | 9–14B models in bf16 (~18–28 GB) + KV cache |
+| Arch | **Ampere or newer** (A100 / A6000 / L40S / H100) | real **bf16** (avoid Turing "Q RTX 8000") |
+| Driver | **≥ 580 (CUDA 13)** for Gemma-4 / Qwen3.5; ≥ 560 for older (Qwen3-14B) | newest models need SGLang ≥0.5.11 → torch 2.11+cu130 → driver ≥ 580 |
+| Disk | **≥ 150 GB** | venv (~10 GB) + model weights (2× ~25 GB) |
 | Geo | **US / EU** | reliable Hugging Face downloads (avoid CN — HF often blocked) |
-| **Privileged** | **ENABLED** | **required** for Docker-in-Docker (benchmark sandboxes) |
+| Privileged | optional (only for *graded* benchmark verifiers, deferred) | Docker-in-Docker |
+
+**Models (verified ids):** `google/gemma-4-12b-it` (not gated), `Qwen/Qwen3.5-9B`,
+`Qwen/Qwen3-14B` (older-stack fallback, driver ≥ 560). *Note: `Qwen3.5-*-Instruct` ids don't
+exist — the chat model is the bare `Qwen/Qwen3.5-9B`.*
+
+**Recommended offer (driver 580, no Docker needed):** A100 PCIE 40G, California, ~$0.40/hr
+(a match at time of writing: id `42971483`). Search: `vastai search offers "cuda_max_good>=13.0 num_gpus=1 gpu_ram>=40 disk_space>=150 rentable=true reliability>0.98" -o 'dph+'`.
 
 ## Recommended pick
 

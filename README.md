@@ -30,9 +30,14 @@ harness_rl/
 - **`.venv-gpu` — GPU inference (SGLang):** `bash scripts/setup_gpu_venv.sh`
 - **Docker — Step 2 training:** `bash scripts/build_image.sh`
 
-Both GPU paths share `scripts/install_gpu_deps.sh` (single source of truth). **GPU requirement:
-NVIDIA driver ≥ 560** — latest SGLang pulls `torch 2.7.1+cu126` (CUDA 12.6). Validated on an
-A100 (driver 570.133.20): SGLang serves + the harness drives multi-turn inference end-to-end.
+Both GPU paths share `scripts/install_gpu_deps.sh` (single source of truth). **GPU driver:**
+- **≥ 580 (CUDA 13)** for the newest models (**Gemma-4-12B**, **Qwen3.5-9B**) — latest SGLang
+  (≥0.5.11, transformers ≥5.5) pins `torch 2.11+cu130`.
+- **≥ 560 (CUDA 12.6)** suffices for older models (**Qwen3-14B**) via `SGLANG_SPEC='sglang[all]<0.5.11'`.
+
+Validated on an A100 (driver 570): SGLang serves + the harness drives multi-turn inference
+end-to-end host-native (Qwen3-14B completed real agentic tasks on all benchmarks, no Docker).
+Gemma-4 / Qwen3.5 need a **driver-580** box.
 
 ## Local (no-GPU) checks
 
