@@ -21,7 +21,12 @@ pip install -e ".[dev]"
 # GPU inference stack, pinned to cu124 (driver-550-safe)
 pip install --index-url "https://download.pytorch.org/whl/${TORCH_CUDA}" "torch==2.5.1"
 pip install "sglang[all]>=0.4,<0.5"       # PRIMARY local inference backend
-pip install "vllm==0.6.6" || true         # BACKUP local inference backend
+# vLLM (backup) is NOT installed here — it pins torch/flashinfer differently and conflicts
+# with SGLang in one venv. Install it in a SEPARATE venv when needed:
+#   WITH_VLLM=1 bash scripts/setup_gpu_venv.sh .venv-vllm
+if [ "${WITH_VLLM:-0}" = "1" ]; then
+  pip install "vllm==0.6.6"               # BACKUP local inference backend (separate venv)
+fi
 
 echo "OK: GPU venv '$VENV' ready (cu124 / driver 550.163.01)."
 echo "Driver check:"; nvidia-smi --query-gpu=driver_version --format=csv,noheader || true
