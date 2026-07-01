@@ -1,13 +1,53 @@
-.venv/
+# --- Python ---
 __pycache__/
-*.pyc
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
-runs/
-rl_runs/
-data/
+*.py[cod]
 *.egg-info/
 build/
 dist/
+.eggs/
+
+# --- Environments ---
+.venv/
+venv/
+env/
+.python-version
+
+# --- Secrets / config (API keys for LiteLLM: OpenAI/Anthropic/Gemini/HF) ---
+.env
+.env.*
+!.env.example
+*.key
+secrets.*
+
+# --- Caches / tooling ---
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- Run outputs / artifacts ---
+runs/
+rl_runs/
+data/
+outputs/
+logs/
+*.jsonl
+!configs/*.jsonl
+
+# --- ML artifacts: checkpoints, weights, caches ---
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.bin
+hf_cache/
+.cache/
+wandb/
+tensorboard/
+
+# --- OS / editor ---
 .DS_Store
+.idea/
+.vscode/
+*.swp
