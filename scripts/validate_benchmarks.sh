@@ -11,7 +11,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-MODELS=("${GEMMA_ID:-google/gemma-4-9b-it}" "${QWEN_ID:-Qwen/Qwen3.5-9B-Instruct}")
+MODELS=("${GEMMA_ID:-google/gemma-4-12b-it}" "${QWEN_ID:-Qwen/Qwen3.5-14B-Instruct}")
 PORT="${SGLANG_PORT:-30000}"
 IMAGE="${TRAIN_IMAGE:-harness-rl-train:latest}"
 BASE_URL="http://localhost:${PORT}/v1"

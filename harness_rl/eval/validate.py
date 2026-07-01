@@ -69,7 +69,7 @@ def _stub_responder(messages):
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="hrl-validate")
-    p.add_argument("--model", default="google/gemma-4-9b-it")
+    p.add_argument("--model", default="google/gemma-4-12b-it")
     p.add_argument("--base-url", default=None, help="SGLang endpoint; omit for closed API model")
     p.add_argument("--benchmarks", nargs="+", default=ALL_BENCHES)
     p.add_argument("--stub", action="store_true", help="offline harness-path check (no GPU/server)")

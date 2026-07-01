@@ -2,10 +2,10 @@
 # Targets dense Gemma 4 (transformers>=5.5) via slime's FSDP backend (SLIME_BACKEND=fsdp)
 # and Qwen via Megatron/FSDP.
 #
-# DRIVER COMPATIBILITY: pinned to CUDA 12.4 (cu124) for NVIDIA driver 550.163.01.
-#   driver 550.163.01 supports CUDA <= 12.4 (CUDA 12.4 needs >= 550.54.14; 12.5→555, 12.6→560,
-#   12.8→570). DO NOT bump the CUDA base or the cu124 wheels below without also upgrading the
-#   driver, or the container will fail with "CUDA driver version is insufficient".
+# DRIVER COMPATIBILITY: pinned to CUDA 12.4 (cu124) — the safe common denominator.
+#   Target driver 550.163.01 supports CUDA <= 12.4; the actual vast instance surveyed runs
+#   570.133.20 (supports up to CUDA 12.8). cu124 wheels run on BOTH (newer drivers are
+#   backward-compatible). Only bump to cu126/cu128 if you know the host driver is >= 560/570.
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
