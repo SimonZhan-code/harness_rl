@@ -65,9 +65,11 @@ python -m harness_rl.rl.train_grpo --model google/gemma-4-12b-it --benchmark ter
 # prints the `SLIME_BACKEND=fsdp python -m slime.train ...` command + validates wiring
 ```
 
-> **Dense Gemma caveat:** dense Gemma-4 is not on slime's Megatron-Bridge path (MoE-only),
-> so training uses slime's **FSDP backend** (`SLIME_BACKEND=fsdp`). Validate on vast; if
-> broken, fall back to Gemma-4 MoE (26B-A4B) or make Qwen3.5 the primary.
+> **Backend — Megatron first, FSDP backup.** Default is Megatron (Qwen + Gemma-4 MoE work).
+> **Dense Gemma-4** isn't on Megatron-Bridge (MoE-only), so the launcher **auto-selects the
+> FSDP backup** (`SLIME_BACKEND=fsdp`) for it. Validate on vast; if the dense-Gemma FSDP path
+> is broken, fall back to Gemma-4 MoE (26B-A4B) or make Qwen3.5 the primary. Force with
+> `--backend {megatron,fsdp}`.
 
 ## Models
 

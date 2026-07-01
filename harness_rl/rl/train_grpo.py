@@ -24,7 +24,7 @@ class GRPOConfig:
     model: str = "google/gemma-4-12b-it"       # verify exact HF id
     benchmark: str = "terminal_bench_2"         # trainable benches only
     gamma_variant: str = "G3_structured_memory"
-    backend: str = "fsdp"                       # dense Gemma → FSDP (SLIME_BACKEND=fsdp)
+    backend: str = "megatron"                   # Megatron first; FSDP is the backup (dense Gemma)
     full_parameter: bool = True                 # small models → full FT; LoRA optional later
     lora_rank: int | None = None
     # GRPO / slime
@@ -62,10 +62,31 @@ def build_generate_fn(cfg: GRPOConfig):
     )
 
 
+def _is_dense_gemma(model: str) -> bool:
+    """Dense Gemma variants (4b/12b/27b/31b) — NOT the MoE (…-a4b/…moe)."""
+    m = model.lower()
+    return "gemma" in m and "a4b" not in m and "moe" not in m
+
+
+def resolve_backend(model: str, requested: str = "megatron") -> tuple[str, str]:
+    """Megatron-first with FSDP backup.
+
+    Honor an explicit non-default request; otherwise default to Megatron but auto-fall-back
+    to FSDP for dense Gemma (which Megatron-Bridge cannot convert — MoE-only).
+    Returns (backend, note).
+    """
+    if requested != "megatron":
+        return requested, ""
+    if _is_dense_gemma(model):
+        return "fsdp", "auto: dense Gemma is not on Megatron-Bridge (MoE-only) → FSDP backup"
+    return "megatron", ""
+
+
 def slime_launch_command(cfg: GRPOConfig) -> str:
     """Emit the slime launch command (verify flag names against installed slime on vast)."""
+    backend, _ = resolve_backend(cfg.model, cfg.backend)
     peft = "--lora-rank %d" % cfg.lora_rank if cfg.lora_rank else "--full-parameter"
-    env = "SLIME_BACKEND=fsdp " if cfg.backend == "fsdp" else ""
+    env = "SLIME_BACKEND=fsdp " if backend == "fsdp" else ""   # Megatron is slime's default
     return (
         f"{env}python -m slime.train "
         f"--model {shlex.quote(cfg.model)} "
@@ -80,7 +101,10 @@ def slime_launch_command(cfg: GRPOConfig) -> str:
 def main(cfg: GRPOConfig) -> None:  # pragma: no cover (runs on vast.ai)
     """Validate config + print the slime launch. Actual `slime.train` runs on vast."""
     _ = build_generate_fn(cfg)  # fail fast on bad benchmark / import errors
-    print("slime launch (run on vast.ai with slime installed):\n")
+    backend, note = resolve_backend(cfg.model, cfg.backend)
+    if note:
+        print(f"[backend] {note}")
+    print(f"slime launch (backend={backend}; run on vast.ai with slime installed):\n")
     print(slime_launch_command(cfg))
     raise SystemExit(
         "This launcher prints the slime command and validates wiring. Execute the printed "
@@ -96,11 +120,13 @@ def _parse_args() -> GRPOConfig:
     p.add_argument("--lora-rank", type=int, default=None)
     p.add_argument("--beta-process", type=float, default=0.0)
     p.add_argument("--num-gpus", type=int, default=8)
+    p.add_argument("--backend", choices=["megatron", "fsdp"], default="megatron",
+                   help="Megatron first; FSDP backup (auto-selected for dense Gemma).")
     p.add_argument("--served-base-url", default=GRPOConfig.served_base_url)
     a = p.parse_args()
     return GRPOConfig(model=a.model, benchmark=a.benchmark, gamma_variant=a.gamma_variant,
                       lora_rank=a.lora_rank, full_parameter=a.lora_rank is None,
-                      beta_process=a.beta_process, num_gpus=a.num_gpus,
+                      beta_process=a.beta_process, num_gpus=a.num_gpus, backend=a.backend,
                       served_base_url=a.served_base_url)
 
 
