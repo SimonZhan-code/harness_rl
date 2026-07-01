@@ -60,6 +60,68 @@ class BenchmarkAdapter(Protocol):
         ...
 
 
+class LocalShellEnv:
+    """Host-native environment — runs the fixed `bash` tool directly on the machine, in a
+    per-task working directory. NO container.
+
+    For hosts where Docker/Podman can't run (e.g. unprivileged vast.ai instances), this lets
+    the harness drive real multi-turn inference + tool-use to validate the model on each
+    benchmark's task format. Scoring: pass a `verify_fn(workdir)->Outcome` to get a real u_g
+    where the verifier can run host-native (SWE-bench via a per-task venv, GameDevBench via
+    host Godot, WebGameBench via host Playwright); otherwise `verify` reports whether the
+    episode completed (inference-ran signal), not a graded score.
+
+    ⚠️ Runs commands on the host with no isolation — use only on a disposable box.
+    """
+
+    def __init__(self, workdir: str | None = None, setup_cmds: list[str] | None = None,
+                 verify_fn=None, done_tool: str = "submit", exec_timeout_s: int = 120):
+        import tempfile
+
+        self.workdir = workdir or tempfile.mkdtemp(prefix="hrl-local-")
+        self.setup_cmds = setup_cmds or []
+        self.verify_fn = verify_fn
+        self.done_tool = done_tool
+        self.exec_timeout_s = exec_timeout_s
+        self._submitted = False
+
+    def reset(self) -> Observation:
+        import os
+        os.makedirs(self.workdir, exist_ok=True)
+        for cmd in self.setup_cmds:
+            self._run(cmd)
+        return Observation(text=f"working dir {self.workdir} ready (host shell, no container)")
+
+    def _run(self, cmd: str) -> str:
+        import subprocess
+        try:
+            proc = subprocess.run(["bash", "-lc", cmd], cwd=self.workdir, capture_output=True,
+                                  text=True, timeout=self.exec_timeout_s)
+            return ((proc.stdout or "") + (proc.stderr or ""))[-8000:]
+        except subprocess.TimeoutExpired:
+            return f"(timeout after {self.exec_timeout_s}s)"
+
+    def execute(self, action: Action) -> Observation:
+        if action.tool != "bash":
+            return Observation(text=f"unsupported tool {action.tool!r}")
+        return Observation(text=self._run(action.args.get("cmd", "")))
+
+    def is_done(self, action: Action | None) -> bool:
+        done = bool(action and action.tool == self.done_tool)
+        self._submitted = self._submitted or done
+        return done
+
+    def verify(self) -> Outcome:
+        if self.verify_fn is not None:
+            return self.verify_fn(self.workdir)
+        # No host-native verifier: report inference-ran, not a graded score.
+        return Outcome(u_g=1.0 if self._submitted else 0.0,
+                       terminated_reason="submit" if self._submitted else "budget")
+
+    def close(self) -> None:
+        pass
+
+
 class EnvStub:
     """In-memory environment for local no-GPU tests.
 
