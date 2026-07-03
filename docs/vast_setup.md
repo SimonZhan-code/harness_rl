@@ -60,13 +60,14 @@ denied`, that host didn't honor privileged → destroy and pick another offer.
 
 ```bash
 git clone https://github.com/SimonZhan-code/harness_rl.git && cd harness_rl
-bash scripts/setup_gpu_venv.sh                     # .venv-gpu (SGLang, cu126; driver ≥ 560)
-bash scripts/serve_sglang.sh <hf-model-id> 30000 & # serve a model
-python -m harness_rl.eval.validate --model <hf-model-id> --base-url http://localhost:30000/v1
+bash scripts/setup_gpu_venv.sh                     # .venv-gpu (SGLang cu130; driver ≥ 580)
+bash scripts/serve_sglang.sh google/gemma-4-12b-it 30000 &   # serve a model (or Qwen/Qwen3.5-9B)
+python -m harness_rl.eval.validate --model google/gemma-4-12b-it --base-url http://localhost:30000/v1
 # full matrix (both models x benchmarks) once Docker + task registries are present:
 bash scripts/validate_benchmarks.sh
 ```
 
-Inference-only (no Docker) already validated on an A100 (driver 570.133.20): SGLang serves +
-the harness drives multi-turn inference end-to-end. Docker is needed only for the benchmark
+Inference validated host-native (no Docker) on an A100-80GB (driver 595.71): SGLang serves
+Gemma-4-12B + Qwen3.5-9B and the harness drives multi-turn inference end-to-end on all four
+benchmarks. Docker is needed only for the benchmark
 task sandboxes.

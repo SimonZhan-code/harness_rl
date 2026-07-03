@@ -30,14 +30,16 @@ harness_rl/
 - **`.venv-gpu` — GPU inference (SGLang):** `bash scripts/setup_gpu_venv.sh`
 - **Docker — Step 2 training:** `bash scripts/build_image.sh`
 
-Both GPU paths share `scripts/install_gpu_deps.sh` (single source of truth). **GPU driver:**
-- **≥ 580 (CUDA 13)** for the newest models (**Gemma-4-12B**, **Qwen3.5-9B**) — latest SGLang
-  (≥0.5.11, transformers ≥5.5) pins `torch 2.11+cu130`.
-- **≥ 560 (CUDA 12.6)** suffices for older models (**Qwen3-14B**) via `SGLANG_SPEC='sglang[all]<0.5.11'`.
+Both GPU paths share `scripts/install_gpu_deps.sh` (single source of truth). **CUDA / driver:**
+- **CUDA 13.0 (`torch 2.11+cu130`) → driver ≥ 580** for the newest models (**Gemma-4-12B**,
+  **Qwen3.5-9B**): sglang ≥0.5.11 + **transformers ≥5.12** (Gemma-4's `gemma4_unified` needs it).
+- **CUDA 12.6 → driver ≥ 560** fallback for older models (**Qwen3-14B**) via
+  `SGLANG_SPEC='sglang[all]<0.5.11' SKIP_TF_UPGRADE=1`.
 
-Validated on an A100 (driver 570): SGLang serves + the harness drives multi-turn inference
-end-to-end host-native (Qwen3-14B completed real agentic tasks on all benchmarks, no Docker).
-Gemma-4 / Qwen3.5 need a **driver-580** box.
+**Validated** on an A100-80GB (driver 595.71): sglang 0.5.14 + transformers 5.12 serve both
+**Gemma-4-12B** and **Qwen3.5-9B**, harness drives real multi-turn agentic inference on all
+four benchmarks host-native (no Docker). torch/sglang/flashinfer ship prebuilt cu130 wheels
+bundling the CUDA-13 runtime, so no separate CUDA toolkit install is needed.
 
 ## Local (no-GPU) checks
 

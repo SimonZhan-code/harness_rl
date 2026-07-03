@@ -2,9 +2,10 @@
 # GPU ".venv build" for LOCAL INFERENCE (SGLang primary). Run on a GPU host (vast.ai).
 # Creates a venv, installs the orchestration package + the shared GPU stack.
 #
-# DRIVER REQUIREMENT: NVIDIA driver >= 560 (latest SGLang → torch 2.7.1+cu126 / CUDA 12.6).
-# Validated on A100, driver 570.133.20. (Dropped the driver-550/cu124 target — newest models
-# need recent SGLang, which forces cu126.)
+# CUDA / DRIVER: stack is CUDA 13.0 (torch 2.11+cu130) — REQUIRES NVIDIA driver >= 580.
+# Validated on A100-80GB, driver 595.71.05: sglang 0.5.14 + transformers 5.12 serve
+# Gemma-4-12B + Qwen3.5-9B. Older-driver fallback (560-579, cu126, no Gemma-4/Qwen3.5):
+#   SGLANG_SPEC='sglang[all]<0.5.11' SKIP_TF_UPGRADE=1 bash scripts/setup_gpu_venv.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

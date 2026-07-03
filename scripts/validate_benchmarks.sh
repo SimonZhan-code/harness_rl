@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Validate the env build across: {Gemma-4-9B, Qwen3.5-9B} x {gpu-venv, docker} x each benchmark.
+# Validate the env build across: {Gemma-4-12B, Qwen3.5-9B} x {gpu-venv, docker} x each benchmark.
 # Serves each model with SGLang, then runs `hrl-validate` (minimal inference per benchmark).
-# Run on vast.ai (GPU host, driver 550.163.01, cu124). Prereqs:
+# Run on vast.ai (GPU host, driver >= 580 / CUDA 13 for these models). Prereqs:
 #   - GPU venv:  bash scripts/setup_gpu_venv.sh   (creates .venv-gpu)
 #   - docker:    bash scripts/build_image.sh      (creates harness-rl-train:latest)
 #   - benchmark task registries present (TB2_TASKS_DIR / GAMEDEV_TASKS_DIR / WEBGAME_TASKS_DIR)
-#     and HF_TOKEN exported for gated Gemma + SWE-bench-PRO dataset.
+#     and HF_TOKEN for the SWE-bench-PRO dataset (gemma-4-12b-it itself is NOT gated).
 #
-# ⚠️ VERIFY exact HF ids before running — "Gemma 4 9B" / "Qwen 3.5 9B" sizes must exist.
+# Validated model ids: google/gemma-4-12b-it, Qwen/Qwen3.5-9B.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-MODELS=("${GEMMA_ID:-google/gemma-4-12b-it}" "${QWEN_ID:-Qwen/Qwen3.5-14B-Instruct}")
+MODELS=("${GEMMA_ID:-google/gemma-4-12b-it}" "${QWEN_ID:-Qwen/Qwen3.5-9B}")
 PORT="${SGLANG_PORT:-30000}"
 IMAGE="${TRAIN_IMAGE:-harness-rl-train:latest}"
 BASE_URL="http://localhost:${PORT}/v1"
