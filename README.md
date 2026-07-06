@@ -15,10 +15,11 @@ harness/Γ/logging code runs in both; only `base_url` changes.
 ```
 harness_rl/
   types.py           # shared dataclasses (Message, Trace, GammaSnapshot, ...) — GPU-free
-  gamma/             # Γ context managers: G0_truncate G1_retrieval G2_summarize G3_structured_memory
+  gamma/             # Γ memory archs: G0_truncate G1_retrieval G2_summarize G3_structured_memory G5_external
   harness/agent.py   # the control loop (fixed bash tool + parser Ω₀) with the Γ seam
   serving/client.py  # ModelClient (LiteLLM) + StubModel (no-GPU fake) — the base_url seam
-  benchmarks/        # adapters: terminal_bench, swebench_pro, gamedev, webgame (+ EnvStub)
+  benchmarks/        # adapters: terminal_bench, swebench_pro, swebench_lite, livecodebench,
+                     #           gamedev, gamecraft, webgame (+ LocalShellEnv/DockerEnv/EnvStub)
   logging/           # step-segmented Trace JSONL (logs Γ's kept/dropped/summarized/retrieved)
   eval/              # Step 1 Γ variance probe (GammaProbe, spread_table, `hrl-probe` CLI)
   rl/                # Step 2 ONLY: env.py (neutral rollout), slime_adapter.py, reward.py, train_grpo.py
@@ -38,8 +39,26 @@ Both GPU paths share `scripts/install_gpu_deps.sh` (single source of truth). **C
 
 **Validated** on an A100-80GB (driver 595.71): sglang 0.5.14 + transformers 5.12 serve both
 **Gemma-4-12B** and **Qwen3.5-9B**, harness drives real multi-turn agentic inference on all
-four benchmarks host-native (no Docker). torch/sglang/flashinfer ship prebuilt cu130 wheels
+benchmarks host-native (no Docker). torch/sglang/flashinfer ship prebuilt cu130 wheels
 bundling the CUDA-13 runtime, so no separate CUDA toolkit install is needed.
+
+## Benchmarks (difficulty spread)
+
+| Benchmark | Domain | Reward | Docker? | Role |
+|---|---|---|---|---|
+| terminal_bench_2 · swebench_pro | hard CLI / SWE | tests | yes | sophisticated-model eval |
+| **livecodebench** | competitive programming | hidden tests (subprocess) | **no** | **small-model RL** (real reward, host-native) |
+| **swebench_lite** | SWE (easier 300-task subset) | FAIL/PASS tests | graded=yes | small-model RL; inference host-native, graded deferred |
+| gamedev · **gamecraft** | Godot games | unit tests / rubric judge | no | gaming eval (gamecraft = eval-only) |
+| webgame | browser games | LLM judge | no | eval-only |
+
+Memory architectures (Γ) swept by the probe: **G0** truncate · **G1** retrieval · **G2** summarize ·
+**G3** structured-scratchpad · **G5** external/hierarchical (summary + archival retrieval + recency).
+
+> **Driver < 580 (e.g. 570):** the newest models (Gemma-4/Qwen3.5) can't serve — use the small-model
+> fallback stack + a small model: `SGLANG_SPEC='sglang[all]<0.5.11' SKIP_TF_UPGRADE=1 bash
+> scripts/setup_gpu_venv.sh` then serve e.g. `Qwen/Qwen2.5-Coder-7B-Instruct`. Ideal for the
+> livecodebench/swebench_lite small-model Γ comparison.
 
 ## Local (no-GPU) checks
 

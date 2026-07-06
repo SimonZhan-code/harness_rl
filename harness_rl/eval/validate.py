@@ -22,8 +22,8 @@ from harness_rl.harness.agent import run_episode
 from harness_rl.serving.client import ModelClient, StubModel
 from harness_rl.types import BudgetCaps, Message, Role, TaskSpec
 
-TRAINABLE = ["terminal_bench_2", "swebench_pro", "gamedev"]
-ALL_BENCHES = TRAINABLE + ["webgame"]
+TRAINABLE = ["terminal_bench_2", "swebench_pro", "swebench_lite", "livecodebench", "gamedev"]
+ALL_BENCHES = TRAINABLE + ["gamecraft", "webgame"]
 
 # Representative host-native tasks (no dataset / no container needed) — exercise each
 # benchmark's tool-use style so we can validate model inference on the box.
@@ -34,9 +34,18 @@ REPRESENTATIVE_TASKS = {
     "swebench_pro":
         "Create math_utils.py with an add(a,b) function and test_math.py that asserts "
         "add(2,3)==5. Run `python -m pytest -q test_math.py`. If it passes, output TASK_COMPLETE.",
+    "swebench_lite":
+        "Create utils.py with a divide(a,b) that returns a/b, but returns None when b==0. "
+        "Test it with a quick python -c, then output TASK_COMPLETE.",
+    "livecodebench":
+        "Write solution.py that reads two space-separated integers from stdin and prints their "
+        "sum. Verify with `echo '2 3' | python solution.py` (expect 5), then output TASK_COMPLETE.",
     "gamedev":
         "Create a GDScript file player.gd with a `func _ready(): print(\"hello\")`. "
         "Show it with cat, then output TASK_COMPLETE.",
+    "gamecraft":
+        "Create a minimal Godot project: write player.gd with `func _ready(): print(\"start\")` "
+        "and a project.godot stub file. Show both with cat, then output TASK_COMPLETE.",
 }
 
 

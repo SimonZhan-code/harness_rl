@@ -31,7 +31,8 @@ def main() -> None:
     p.add_argument("--base-url", default=None,
                    help="SGLang OpenAI-compatible endpoint (open models); omit for closed API models")
     p.add_argument("--gammas", nargs="+",
-                   default=["G0_truncate", "G1_retrieval", "G2_summarize", "G3_structured_memory"])
+                   default=["G0_truncate", "G1_retrieval", "G2_summarize",
+                            "G3_structured_memory", "G5_external"])
     p.add_argument("--n-tasks", type=int, default=25)
     p.add_argument("--out-dir", default="./runs")
     p.add_argument("--stub", action="store_true", help="no-GPU dry run with a canned model+env")

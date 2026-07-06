@@ -1,7 +1,7 @@
 # Example Step 1 probe config (consumed on vast.ai; documents the knobs).
 model: google/gemma-4-12b-it          # verify exact HF id; served via SGLang
 base_url: http://localhost:30000/v1   # SGLang OpenAI-compatible endpoint (default port 30000)
-benchmark: terminal_bench_2           # terminal_bench_2 | swebench_pro | gamedev
+benchmark: livecodebench              # terminal_bench_2 | swebench_pro | swebench_lite | livecodebench | gamedev | gamecraft
 n_tasks: 25
 long_horizon: true                    # prefer high horizon_hint tasks
 gammas:
@@ -9,6 +9,7 @@ gammas:
   - G1_retrieval
   - G2_summarize
   - G3_structured_memory
+  - G5_external
 budget:
   max_turns: 40
   context_window: 32000               # W: the finite window Γ must fit into
@@ -16,4 +17,5 @@ gamma_kwargs:
   G1_retrieval: {recency_turns: 6, retrieve_k: 4}
   G2_summarize: {recency_turns: 6, compact_every: 4}
   G3_structured_memory: {recency_turns: 4}
+  G5_external: {recency_turns: 4, retrieve_k: 3, compact_every: 4}
 out_dir: ./runs
