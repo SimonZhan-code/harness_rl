@@ -22,7 +22,8 @@ from harness_rl.harness.agent import run_episode
 from harness_rl.serving.client import ModelClient, StubModel
 from harness_rl.types import BudgetCaps, Message, Role, TaskSpec
 
-TRAINABLE = ["terminal_bench_2", "swebench_pro", "swebench_lite", "livecodebench", "gamedev"]
+TRAINABLE = ["terminal_bench_2", "swebench_pro", "swebench_lite", "swebench_verified",
+             "livecodebench", "gamedev"]
 ALL_BENCHES = TRAINABLE + ["gamecraft", "webgame"]
 
 # Representative host-native tasks (no dataset / no container needed) — exercise each
@@ -36,6 +37,9 @@ REPRESENTATIVE_TASKS = {
         "add(2,3)==5. Run `python -m pytest -q test_math.py`. If it passes, output TASK_COMPLETE.",
     "swebench_lite":
         "Create utils.py with a divide(a,b) that returns a/b, but returns None when b==0. "
+        "Test it with a quick python -c, then output TASK_COMPLETE.",
+    "swebench_verified":
+        "Create strutils.py with a slugify(s) that lowercases and replaces spaces with '-'. "
         "Test it with a quick python -c, then output TASK_COMPLETE.",
     "livecodebench":
         "Write solution.py that reads two space-separated integers from stdin and prints their "

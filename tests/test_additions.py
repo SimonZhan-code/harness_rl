@@ -11,9 +11,9 @@ from harness_rl.types import Action, Observation, TaskSpec
 
 
 def test_new_benchmarks_registered():
-    for b in ("livecodebench", "swebench_lite", "gamecraft"):
+    for b in ("livecodebench", "swebench_lite", "swebench_verified", "gamecraft"):
         assert b in BENCHMARK_REGISTRY
-    assert {"livecodebench", "swebench_lite"} <= TRAINABLE_BENCHMARKS
+    assert {"livecodebench", "swebench_lite", "swebench_verified"} <= TRAINABLE_BENCHMARKS
     assert "gamecraft" not in TRAINABLE_BENCHMARKS  # eval-only (rubric judge)
 
 

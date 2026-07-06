@@ -18,7 +18,7 @@ harness_rl/
   gamma/             # Γ memory archs: G0_truncate G1_retrieval G2_summarize G3_structured_memory G5_external
   harness/agent.py   # the control loop (fixed bash tool + parser Ω₀) with the Γ seam
   serving/client.py  # ModelClient (LiteLLM) + StubModel (no-GPU fake) — the base_url seam
-  benchmarks/        # adapters: terminal_bench, swebench_pro, swebench_lite, livecodebench,
+  benchmarks/        # adapters: terminal_bench, swebench_pro/lite/verified, livecodebench,
                      #           gamedev, gamecraft, webgame (+ LocalShellEnv/DockerEnv/EnvStub)
   logging/           # step-segmented Trace JSONL (logs Γ's kept/dropped/summarized/retrieved)
   eval/              # Step 1 Γ variance probe (GammaProbe, spread_table, `hrl-probe` CLI)
@@ -48,7 +48,7 @@ bundling the CUDA-13 runtime, so no separate CUDA toolkit install is needed.
 |---|---|---|---|---|
 | terminal_bench_2 · swebench_pro | hard CLI / SWE | tests | yes | sophisticated-model eval |
 | **livecodebench** | competitive programming | hidden tests (subprocess) | **no** | **small-model RL** (real reward, host-native) |
-| **swebench_lite** | SWE (easier 300-task subset) | FAIL/PASS tests | graded=yes | small-model RL; inference host-native, graded deferred |
+| **swebench_lite** · **swebench_verified** | SWE (300 lite / 500 human-verified) | FAIL/PASS tests | graded=yes | inference host-native, graded (Docker) deferred |
 | gamedev · **gamecraft** | Godot games | unit tests / rubric judge | no | gaming eval (gamecraft = eval-only) |
 | webgame | browser games | LLM judge | no | eval-only |
 
