@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import json
+import pickle
 import subprocess
 import tempfile
 import zlib
@@ -24,19 +25,25 @@ from harness_rl.types import Action, Observation, Outcome
 
 
 def decode_tests(raw: Any) -> list[dict]:
-    """Decode a LiveCodeBench test-case field into a list of {input, output, testtype}."""
+    """Decode a LiveCodeBench test-case field into a list of {input, output, testtype}.
+
+    LiveCodeBench `private_test_cases` are `base64(zlib(pickle(json_str)))`; `public_test_cases`
+    are plain JSON. (pickle is the LCB-official format — this is their known dataset.)
+    """
     if raw is None:
         return []
     if isinstance(raw, list):
         return raw
     if isinstance(raw, str):
-        # try base64 -> zlib -> json (private_test_cases), then plain json (public_test_cases)
         for decode in (
-            lambda s: json.loads(zlib.decompress(base64.b64decode(s))),
-            lambda s: json.loads(s),
+            lambda s: pickle.loads(zlib.decompress(base64.b64decode(s))),   # private (LCB)
+            lambda s: json.loads(zlib.decompress(base64.b64decode(s))),     # zlib+json
+            lambda s: json.loads(s),                                        # plain json (public)
         ):
             try:
                 out = decode(raw)
+                if isinstance(out, str):        # pickle yields the json string
+                    out = json.loads(out)
                 return out if isinstance(out, list) else []
             except Exception:
                 continue
