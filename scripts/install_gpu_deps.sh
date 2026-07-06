@@ -18,10 +18,11 @@ $PIP install --upgrade pip
 $PIP install "$SGLANG_SPEC"                   # PRIMARY backend; brings matching torch + transformers
 
 # Gemma-4 (`gemma4_unified`) needs transformers >= 5.12 — NEWER than sglang 0.5.14's pin (5.8.1).
-# Overriding the pin works at runtime (validated: served Gemma-4-12B + Qwen3.5-9B on driver 595,
-# host-native benchmark inference PASS on all four). Skip with SKIP_TF_UPGRADE=1 if not using Gemma-4.
+# Pin EXACTLY 5.12.1: it's validated (served Gemma-4-12B + Qwen3.5-9B, driver 595), while newer
+# 5.13.x has a model-registration bug ("'qwen3_asr' is already used ..."). Skip with
+# SKIP_TF_UPGRADE=1 if you don't need Gemma-4/Qwen3.5.
 if [ "${SKIP_TF_UPGRADE:-0}" != "1" ]; then
-  $PIP install -U "transformers>=5.12"
+  $PIP install "transformers==${TF_VERSION:-5.12.1}"
 fi
 
 # vLLM (backup) pins torch/flashinfer differently — install in a SEPARATE venv only:
