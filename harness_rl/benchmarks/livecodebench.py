@@ -19,6 +19,13 @@ from harness_rl.types import Outcome, TaskSpec  # noqa: F401 (Outcome re-exporte
 
 _DIFF_HORIZON = {"easy": 1, "medium": 2, "hard": 3}
 
+# version_tag -> raw JSONL file in the HF dataset repo (datasets>=3 dropped loading scripts,
+# so we read the per-version jsonl directly via huggingface_hub).
+_VERSION_FILE = {
+    "release_v1": "test.jsonl", "release_v2": "test2.jsonl", "release_v3": "test3.jsonl",
+    "release_v4": "test4.jsonl", "release_v5": "test5.jsonl", "release_v6": "test6.jsonl",
+}
+
 _LCB_SYSTEM = (
     "You are a competitive-programming agent in a sandboxed shell (no container). Solve the "
     "problem by writing your solution to `solution.py`, then verify it against the provided "
@@ -40,17 +47,33 @@ class LiveCodeBenchAdapter:
         self.hf_id = hf_id
         self._cache: list[TaskSpec] | None = None
 
+    def _iter_rows(self):
+        """Yield problem dicts — read the per-version JSONL directly (datasets>=3 dropped the
+        loading script). Falls back to `load_dataset` for older datasets versions."""
+        import json
+        fname = _VERSION_FILE.get(self.version_tag, "test6.jsonl")
+        try:
+            from huggingface_hub import hf_hub_download
+            path = hf_hub_download(self.hf_id, fname, repo_type="dataset")
+            with open(path) as f:
+                for line in f:
+                    if line.strip():
+                        yield json.loads(line)
+            return
+        except Exception:
+            pass
+        try:  # datasets<3 with the loading script
+            from datasets import load_dataset
+            yield from load_dataset(self.hf_id, split="test", version_tag=self.version_tag,
+                                    trust_remote_code=True)
+        except Exception:
+            return
+
     def _load(self) -> list[TaskSpec]:
         if self._cache is not None:
             return self._cache
-        try:
-            from datasets import load_dataset  # lazy .venv dep
-        except Exception:
-            return []
-        ds = load_dataset(self.hf_id, split="test", version_tag=self.version_tag,
-                          trust_remote_code=True)
         specs = []
-        for row in ds:
+        for row in self._iter_rows():
             meta = row.get("metadata")
             if isinstance(meta, str):
                 try:
