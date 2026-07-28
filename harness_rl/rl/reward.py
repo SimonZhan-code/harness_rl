@@ -90,6 +90,52 @@ def supo_samples(rollout, overlong_mask: bool = True) -> list[dict]:
             "reward": R,                 # shared across all segments → shared group-relative advantage
             "is_summary": s.is_summary,
             "segment": s.segment,
+            "category_tokens": dict(getattr(s, "category_tokens", {}) or {}),  # #0 summarization/thinking/tool_call
         }
         for s in rollout.segments
     ]
+
+
+def category_advantage_report(rollouts: list, eps: float = 1e-6) -> dict:
+    """#1 — observational per-category token-mass, advantage-weighted (arXiv 2510.06727 context).
+
+    Given a batch/group of SUPORollouts, compute each rollout's group-relative advantage
+    `A = (R - mu)/(sigma+eps)` over the batch (GRPO/SUPO), then aggregate by token category
+    (summarization / thinking / tool_call):
+      - `tokens[c]`     : total generated tokens in category c
+      - `adv_mass[c]`   : sum over turns of (category tokens) * A  — where the update PRESSURE lands
+      - `tokens_success[c]` / `tokens_fail[c]` : token split by outcome (u_g>0 vs u_g==0)
+
+    This is DESCRIPTIVE monitoring (under Thm 3.2 the advantage is uniform within a rollout, so
+    this shows where the gradient mass falls, not causal per-category contribution — that's #3).
+    """
+    from harness_rl.rl.supo import CATEGORIES  # lazy (avoids import cycle)
+
+    rewards = [float(r.outcome_u_g) for r in rollouts]
+    n = len(rewards)
+    mu = sum(rewards) / n if n else 0.0
+    sigma = (sum((x - mu) ** 2 for x in rewards) / n) ** 0.5 if n else 0.0
+
+    tokens = {c: 0 for c in CATEGORIES}
+    adv_mass = {c: 0.0 for c in CATEGORIES}
+    tok_succ = {c: 0 for c in CATEGORIES}
+    tok_fail = {c: 0 for c in CATEGORIES}
+    for r in rollouts:
+        A = (float(r.outcome_u_g) - mu) / (sigma + eps)
+        bucket = tok_succ if float(r.outcome_u_g) > 0 else tok_fail
+        for s in r.segments:
+            for c, ntok in (getattr(s, "category_tokens", {}) or {}).items():
+                tokens[c] += ntok
+                adv_mass[c] += ntok * A
+                bucket[c] += ntok
+    total = sum(tokens.values()) or 1
+    return {
+        "n_rollouts": n,
+        "reward_mean": mu,
+        "reward_std": sigma,
+        "tokens": tokens,
+        "token_frac": {c: tokens[c] / total for c in CATEGORIES},
+        "adv_mass": adv_mass,
+        "tokens_success": tok_succ,
+        "tokens_fail": tok_fail,
+    }

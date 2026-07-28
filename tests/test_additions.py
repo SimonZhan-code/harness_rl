@@ -124,3 +124,26 @@ def test_supo_overlong_masking():
         segments: list = []
 
     assert supo_samples(_R(), overlong_mask=True) == []    # overlong → no gradient
+
+
+def test_supo_token_categorization():   # #0
+    from harness_rl.rl.supo import categorize_tokens
+    d = categorize_tokens("Let me look around.\n```bash\nls -la\n```", is_summary=False)
+    assert d.get("thinking", 0) > 0 and d.get("tool_call", 0) > 0
+    assert "tool_call" in categorize_tokens("Done.\nTASK_COMPLETE", is_summary=False)
+    assert categorize_tokens("free-form reasoning, no action", is_summary=False).keys() == {"thinking"}
+    s = categorize_tokens("SUMMARY of progress so far", is_summary=True)
+    assert set(s) == {"summarization"} and s["summarization"] > 0
+
+
+def test_supo_category_advantage_report():   # #1
+    from harness_rl.rl.reward import category_advantage_report
+    from harness_rl.rl.supo import CATEGORIES
+    r_succ = _supo_stub_rollout()
+    r_fail = _supo_stub_rollout()
+    r_fail.outcome_u_g = 0.0
+    rep = category_advantage_report([r_succ, r_fail])
+    assert set(rep["tokens"]) == set(CATEGORIES) and rep["n_rollouts"] == 2
+    assert sum(rep["tokens"].values()) > 0
+    assert sum(rep["tokens_success"].values()) > 0 and sum(rep["tokens_fail"].values()) > 0
+    assert abs(sum(rep["token_frac"].values()) - 1.0) < 1e-6

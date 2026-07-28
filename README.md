@@ -70,6 +70,13 @@ python -m harness_rl.rl.train_supo    # prints the slime launch (run on a GPU bo
 Code: `rl/supo.py` (rollout + segmentation), `rl/reward.py:supo_samples` (Thm 3.2), `rl/train_supo.py`
 (launch), `gamma/g2_summarize.py` (`compact_at_tokens=L`, `summary_mode="replace"`).
 
+**Per-category token tracking** (#0/#1): every generated span is tagged **summarization / thinking /
+tool_call** (`rl/supo.py:categorize_tokens`, on each `SegmentTurn.category_tokens`); a batch report
+(`rl/reward.py:category_advantage_report`) gives per-category token counts, fraction, and
+**advantage-weighted mass** (where the GRPO update pressure lands), split by success/fail. Shown by
+`hrl-supo-check`. Note: under Thm 3.2 the advantage is uniform within a rollout, so this is
+descriptive monitoring, not causal per-category attribution.
+
 Memory architectures (Γ) swept by the probe: **G0** truncate · **G1** retrieval · **G2** summarize ·
 **G3** structured-scratchpad · **G5** external/hierarchical (summary + archival retrieval + recency).
 

@@ -15,9 +15,11 @@ Mechanism:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from harness_rl.benchmarks.base import Environment
+from harness_rl.gamma.base import count_tokens
 from harness_rl.gamma.g2_summarize import G2Summarize
 from harness_rl.harness.agent import DEFAULT_SYSTEM_PROMPT, parse_action
 from harness_rl.serving.client import ModelClient
@@ -29,6 +31,38 @@ SUMMARIZE_PROMPT = (
     "test results / errors you have seen, and your current plan. Write ONLY the summary."
 )
 
+# Token categories for per-category credit tracking (#0).
+CATEGORIES = ("summarization", "thinking", "tool_call")
+_BASH_RE = re.compile(r"```bash\s*\n(.*?)```", re.DOTALL)
+_DONE_RE = re.compile(r"^\s*TASK_COMPLETE\s*$", re.MULTILINE)
+
+
+def _ntok(text: str) -> int:
+    return count_tokens([Message(role=Role.ASSISTANT, content=text)]) if text.strip() else 0
+
+
+def categorize_tokens(output: str, is_summary: bool) -> dict[str, int]:
+    """#0 — split a segment's generated text into per-category token counts.
+
+    A summary turn's tokens are all `summarization`. An action turn splits at the parsed action:
+    the fenced ```bash``` block / `TASK_COMPLETE` is `tool_call`; everything else (the reasoning
+    prefix, incl. any <think>…</think>) is `thinking`. Malformed output with no action → all thinking.
+    """
+    if is_summary:
+        return {"summarization": _ntok(output)}
+    m = _BASH_RE.search(output) or _DONE_RE.search(output)
+    if m:
+        tool_txt = m.group(0)
+        think_txt = output[:m.start()] + output[m.end():]
+    else:
+        tool_txt, think_txt = "", output
+    out: dict[str, int] = {}
+    if _ntok(think_txt):
+        out["thinking"] = _ntok(think_txt)
+    if _ntok(tool_txt):
+        out["tool_call"] = _ntok(tool_txt)
+    return out
+
 
 @dataclass
 class SegmentTurn:
@@ -38,6 +72,7 @@ class SegmentTurn:
     output: str               # policy-generated tokens (response or summary)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    category_tokens: dict[str, int] = field(default_factory=dict)  # #0: summarization/thinking/tool_call
 
 
 @dataclass
@@ -75,7 +110,8 @@ def supo_rollout(task: TaskSpec, env: Environment, model: ModelClient,
         out = model.chat(ctx)
         roll.segments.append(SegmentTurn(segment=seg["id"], is_summary=True, context=ctx,
                                          output=out.text, prompt_tokens=out.prompt_tokens,
-                                         completion_tokens=out.completion_tokens))
+                                         completion_tokens=out.completion_tokens,
+                                         category_tokens=categorize_tokens(out.text, True)))
         roll.num_summaries += 1
         seg["id"] += 1  # subsequent action turns belong to the new (compacted) sub-trajectory
         return out.text
@@ -99,7 +135,8 @@ def supo_rollout(task: TaskSpec, env: Environment, model: ModelClient,
         action = parse_action(out.text)
         roll.segments.append(SegmentTurn(segment=seg["id"], is_summary=False, context=ctx,
                                          output=out.text, prompt_tokens=out.prompt_tokens,
-                                         completion_tokens=out.completion_tokens))
+                                         completion_tokens=out.completion_tokens,
+                                         category_tokens=categorize_tokens(out.text, False)))
         if action is None:
             obs = Observation(text="No valid action found. Emit one ```bash ... ``` block, or TASK_COMPLETE.")
             gamma.on_step(obs, action=None)
