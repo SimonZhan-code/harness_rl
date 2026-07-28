@@ -57,6 +57,26 @@ def build_generate_fn(cfg: SUPOConfig):
     )
 
 
+def supo_training_hook_note() -> str:
+    """Where per-category entropy/KL plug into the slime loss step.
+
+    Inside the GRPO loss on a SUPO segment the trainer already forms, per response token: the
+    policy logits (→ exact entropy) and pi_ref logprobs (→ KL for the penalty). To split those by
+    token category, tokenize the response with `return_offsets_mapping=True` and call, per segment:
+
+        from harness_rl.rl.metrics import (entropy_from_logprobs, token_kl_k3,
+                                           supo_category_metrics, merge_category_metrics)
+        ent = [entropy_from_logprobs(step_logprobs) for step_logprobs in logits.log_softmax(-1)]
+        kl  = [token_kl_k3(lp_new, lp_ref) for lp_new, lp_ref in zip(logp_new_a, logp_ref_a)]
+        seg_stats.append(supo_category_metrics(resp_text, is_summary, offsets, entropy=ent, kl=kl))
+
+    then `merge_category_metrics(seg_stats)` → log `entropy/kl by {summarization,thinking,tool_call}`
+    each step. Watch summarization-entropy → 0 (summary collapse, the SUPO failure mode) and
+    summary-KL spikes (summarizer drift from pi_ref). See `rl/metrics.py`.
+    """
+    return supo_training_hook_note.__doc__ or ""
+
+
 def slime_launch_command(cfg: SUPOConfig) -> str:
     backend, _ = resolve_backend(cfg.model, cfg.backend)
     env = "SLIME_BACKEND=fsdp " if backend == "fsdp" else ""

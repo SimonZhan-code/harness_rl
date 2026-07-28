@@ -41,26 +41,33 @@ def _ntok(text: str) -> int:
     return count_tokens([Message(role=Role.ASSISTANT, content=text)]) if text.strip() else 0
 
 
-def categorize_tokens(output: str, is_summary: bool) -> dict[str, int]:
-    """#0 — split a segment's generated text into per-category token counts.
+def categorize_spans(output: str, is_summary: bool) -> list[tuple[str, int, int]]:
+    """#0 — split a segment's generated text into `(category, start_char, end_char)` spans.
 
-    A summary turn's tokens are all `summarization`. An action turn splits at the parsed action:
-    the fenced ```bash``` block / `TASK_COMPLETE` is `tool_call`; everything else (the reasoning
-    prefix, incl. any <think>…</think>) is `thinking`. Malformed output with no action → all thinking.
+    A summary turn is one `summarization` span. An action turn splits at the parsed action: the
+    fenced ```bash``` block / `TASK_COMPLETE` is `tool_call`; text around it is `thinking` (incl.
+    any <think>…</think>). Malformed output with no action → all `thinking`. Char spans let the
+    trainer label its own tokens (via a tokenizer offset mapping) for per-category entropy/KL.
     """
     if is_summary:
-        return {"summarization": _ntok(output)}
+        return [("summarization", 0, len(output))]
     m = _BASH_RE.search(output) or _DONE_RE.search(output)
-    if m:
-        tool_txt = m.group(0)
-        think_txt = output[:m.start()] + output[m.end():]
-    else:
-        tool_txt, think_txt = "", output
+    if not m:
+        return [("thinking", 0, len(output))]
+    spans: list[tuple[str, int, int]] = []
+    if output[:m.start()].strip():
+        spans.append(("thinking", 0, m.start()))
+    spans.append(("tool_call", m.start(), m.end()))
+    if output[m.end():].strip():
+        spans.append(("thinking", m.end(), len(output)))
+    return spans
+
+
+def categorize_tokens(output: str, is_summary: bool) -> dict[str, int]:
+    """#0 — per-category (heuristic) token counts, derived from `categorize_spans`."""
     out: dict[str, int] = {}
-    if _ntok(think_txt):
-        out["thinking"] = _ntok(think_txt)
-    if _ntok(tool_txt):
-        out["tool_call"] = _ntok(tool_txt)
+    for cat, s, e in categorize_spans(output, is_summary):
+        out[cat] = out.get(cat, 0) + _ntok(output[s:e])
     return out
 
 

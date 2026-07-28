@@ -147,3 +147,69 @@ def test_supo_category_advantage_report():   # #1
     assert sum(rep["tokens"].values()) > 0
     assert sum(rep["tokens_success"].values()) > 0 and sum(rep["tokens_fail"].values()) > 0
     assert abs(sum(rep["token_frac"].values()) - 1.0) < 1e-6
+
+
+# --- per-category entropy + KL (training-hook mechanics) ---
+
+def _word_offsets(text):
+    import re
+    return [(m.start(), m.end()) for m in re.finditer(r"\S+", text)]
+
+
+def test_categorize_spans_action_split():
+    from harness_rl.rl.supo import categorize_spans
+    out = "Let me look.\n```bash\nls -la\n```\nok"
+    spans = categorize_spans(out, is_summary=False)
+    cats = [c for c, _, _ in spans]
+    assert "thinking" in cats and "tool_call" in cats
+    # tool_call span must cover the fenced block exactly
+    tc = next((s, e) for c, s, e in spans if c == "tool_call")
+    assert out[tc[0]:tc[1]].startswith("```bash") and out[tc[0]:tc[1]].endswith("```")
+    assert categorize_spans("SUMMARY", is_summary=True) == [("summarization", 0, len("SUMMARY"))]
+
+
+def test_label_tokens_and_bucket():
+    from harness_rl.rl.metrics import bucket_by_category, label_tokens
+    from harness_rl.rl.supo import categorize_spans
+    out = "think hard\n```bash\nls\n```"
+    offs = _word_offsets(out)
+    labels = label_tokens(categorize_spans(out, is_summary=False), offs)
+    assert "thinking" in labels and "tool_call" in labels
+    vals = [1.0] * len(offs)
+    b = bucket_by_category(labels, vals)
+    assert b["thinking"]["count"] + b["tool_call"]["count"] == sum(1 for x in labels if x)
+    assert all(d["mean"] == 1.0 for d in b.values())
+
+
+def test_token_kl_k3_nonnegative_and_zero_at_equal():
+    from harness_rl.rl.metrics import token_kl_k3
+    assert abs(token_kl_k3(-1.3, -1.3)) < 1e-12          # identical policies → 0
+    assert token_kl_k3(-2.0, -1.0) > 0 and token_kl_k3(-1.0, -2.0) > 0   # k3 is always >= 0
+
+
+def test_entropy_from_logprobs_matches_uniform():
+    import math
+
+    from harness_rl.rl.metrics import entropy_from_logprobs
+    k = 4
+    uniform = [math.log(1.0 / k)] * k
+    assert abs(entropy_from_logprobs(uniform) - math.log(k)) < 1e-9   # H(uniform) = log k
+    peaked = [math.log(0.97)] + [math.log(0.01)] * 3
+    assert entropy_from_logprobs(peaked) < entropy_from_logprobs(uniform)
+
+
+def test_supo_category_metrics_and_merge():
+    from harness_rl.rl.metrics import merge_category_metrics, supo_category_metrics
+    a = "reason\n```bash\nls\n```"
+    m1 = supo_category_metrics(a, False, _word_offsets(a),
+                               entropy=[1.0] * len(_word_offsets(a)),
+                               kl=[0.1] * len(_word_offsets(a)))
+    s = "a concise summary digest"
+    m2 = supo_category_metrics(s, True, _word_offsets(s),
+                               entropy=[0.5] * len(_word_offsets(s)),
+                               kl=[0.2] * len(_word_offsets(s)))
+    rep = merge_category_metrics([m1, m2])
+    assert rep["tokens"]["summarization"] == len(_word_offsets(s))
+    assert abs(rep["entropy"]["summarization"]["mean"] - 0.5) < 1e-9
+    assert abs(rep["kl"]["summarization"]["mean"] - 0.2) < 1e-9
+    assert "thinking" in rep["entropy"] or "tool_call" in rep["entropy"]

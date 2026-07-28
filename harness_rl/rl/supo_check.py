@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import argparse
+import re
 
+from harness_rl.rl.metrics import category_entropy_kl_report
 from harness_rl.rl.reward import category_advantage_report, supo_samples
 from harness_rl.rl.supo import CATEGORIES, SUPORolloutConfig, supo_rollout
 from harness_rl.serving.client import ModelClient, StubModel
@@ -40,6 +42,41 @@ def _print_category_report(rep: dict) -> None:
     for c in CATEGORIES:
         print(f"  {c:14} {rep['tokens'][c]:8d} {rep['token_frac'][c]:6.2f} "
               f"{rep['adv_mass'][c]:10.2f} {rep['tokens_success'][c]:10d} {rep['tokens_fail'][c]:10d}")
+
+
+def _word_offsets(text: str) -> list[tuple[int, int]]:
+    """A stand-in tokenizer offset mapping (whitespace tokens) for the offline entropy/KL demo.
+    At training time these come from the real tokenizer via `return_offsets_mapping=True`."""
+    return [(m.start(), m.end()) for m in re.finditer(r"\S+", text)]
+
+
+def _synthetic_segment_stats(rollouts) -> list[dict]:
+    """Build the trainer-hook input from stub rollouts with SYNTHETIC per-token entropy/KL
+    (no logits offline). Deterministic so the demo is reproducible; at training time `entropy`
+    comes from the policy logits and `kl` from k1/k3 vs pi_ref (see rl/metrics.py)."""
+    stats = []
+    for r in rollouts:
+        for s in r.segments:
+            offs = _word_offsets(s.output)
+            # deterministic stand-in values; summary turns given a lower-entropy signature so the
+            # dashboard visibly separates categories (purely illustrative, not real model stats)
+            base = 0.6 if s.is_summary else 1.2
+            ent = [base + 0.05 * (i % 4) for i in range(len(offs))]
+            kl = [0.03 + 0.01 * (i % 3) for i in range(len(offs))]
+            stats.append({"output": s.output, "is_summary": s.is_summary,
+                          "offsets": offs, "entropy": ent, "kl": kl})
+    return stats
+
+
+def _print_entropy_kl_report(rep: dict) -> None:
+    print("\nper-category entropy & KL(pi_new||pi_ref)  [SYNTHETIC per-token values — "
+          "training-hook mechanics demo; real values come from the slime loss step]:")
+    print(f"  {'category':14} {'tokens':>8} {'entropy':>10} {'kl':>10}")
+    for c in CATEGORIES:
+        n = rep["tokens"].get(c, 0)
+        e = rep["entropy"].get(c, {}).get("mean", 0.0)
+        k = rep["kl"].get(c, {}).get("mean", 0.0)
+        print(f"  {c:14} {n:8d} {e:10.3f} {k:10.4f}")
 
 
 def _make_stub_responder():
@@ -80,10 +117,14 @@ def main() -> None:
         samples = supo_samples(r0)
         _report(r0, samples)
         _print_category_report(category_advantage_report(rollouts))
+        ek = category_entropy_kl_report(_synthetic_segment_stats(rollouts))
+        _print_entropy_kl_report(ek)
         assert r0.num_summaries > 0, "compaction should fire with tiny L + long observations"
         assert any(s["is_summary"] for s in samples), "summary turns must be trainable samples"
         assert all(s["reward"] == samples[0]["reward"] for s in samples), "all segments share the advantage"
-        print("\nSTUB SUPO OK — compaction fired; summaries trainable; per-category token mass reported.")
+        assert set(ek["entropy"]) and "summarization" in ek["tokens"], "entropy/KL by category wired"
+        print("\nSTUB SUPO OK — compaction fired; summaries trainable; per-category token mass, "
+              "entropy & KL reported.")
         return
 
     from harness_rl.benchmarks import make_benchmark
@@ -99,6 +140,7 @@ def main() -> None:
         print(f"\n== {task.task_id} ==")
         _report(rollout, supo_samples(rollout))
     _print_category_report(category_advantage_report(rollouts))
+    _print_entropy_kl_report(category_entropy_kl_report(_synthetic_segment_stats(rollouts)))
     total_sum = sum(r.num_summaries for r in rollouts)
     print(f"\ntotal summaries across {a.n_tasks} tasks: {total_sum} "
           f"({'compaction fired' if total_sum else 'NO compaction — lower --context-L'})")

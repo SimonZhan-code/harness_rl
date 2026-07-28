@@ -71,11 +71,22 @@ Code: `rl/supo.py` (rollout + segmentation), `rl/reward.py:supo_samples` (Thm 3.
 (launch), `gamma/g2_summarize.py` (`compact_at_tokens=L`, `summary_mode="replace"`).
 
 **Per-category token tracking** (#0/#1): every generated span is tagged **summarization / thinking /
-tool_call** (`rl/supo.py:categorize_tokens`, on each `SegmentTurn.category_tokens`); a batch report
-(`rl/reward.py:category_advantage_report`) gives per-category token counts, fraction, and
+tool_call** (`rl/supo.py:categorize_spans`→`categorize_tokens`, on each `SegmentTurn.category_tokens`);
+a batch report (`rl/reward.py:category_advantage_report`) gives per-category token counts, fraction, and
 **advantage-weighted mass** (where the GRPO update pressure lands), split by success/fail. Shown by
 `hrl-supo-check`. Note: under Thm 3.2 the advantage is uniform within a rollout, so this is
 descriptive monitoring, not causal per-category attribution.
+
+**Per-category entropy & KL(π_new‖π_ref)** (`rl/metrics.py`): the training-dynamics dashboard. Since
+exact entropy needs the logits and KL needs π_ref, these are computed in the **slime loss step**;
+`categorize_spans` emits char-spans so `label_tokens(spans, offsets)` maps the trainer's tokens (HF
+`return_offsets_mapping`) to categories, then `bucket_by_category` splits the per-token entropy (from
+logits) and KL (`token_kl_k3`, the k3 estimator GRPO already uses) into the three buckets;
+`supo_category_metrics` + `merge_category_metrics`/`category_entropy_kl_report` aggregate a step/batch.
+Integration point: `rl/train_supo.py:supo_training_hook_note`. **Reads:** summarization-entropy → 0 =
+summary collapse (the SUPO failure mode); summary-KL spike = summarizer drifting off π_ref.
+`hrl-supo-check` prints the table with synthetic per-token values (mechanics demo — real values come
+from the trainer).
 
 Memory architectures (Γ) swept by the probe: **G0** truncate · **G1** retrieval · **G2** summarize ·
 **G3** structured-scratchpad · **G5** external/hierarchical (summary + archival retrieval + recency).
