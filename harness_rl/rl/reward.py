@@ -62,3 +62,34 @@ def localized_advantage_mask(trace: Trace, kappa: float = 0.5) -> list[bool]:
     """Per-step mask: True where gradient should apply (execution span t >= t_star)."""
     t_star = on_track_prefix_len(trace, kappa)
     return [i >= t_star for i in range(len(trace.steps))]
+
+
+def supo_samples(rollout, overlong_mask: bool = True) -> list[dict]:
+    """SUPO credit assignment — Theorem 3.2 (arXiv 2510.06727).
+
+    Emit ONE training sample per sub-trajectory segment (tool-use AND summary turns), each a
+    `(bounded context, generated response)` pair carrying the rollout's **outcome** reward R and
+    a shared `group_key`. slime GRPO then groups by `group_key`, computes the group-relative
+    advantage `A = (R - mu_G)/(sigma_G+eps)`, and applies it to ALL response tokens of every
+    sample. Result:
+      grad = sum_j sum_{t in T_j} grad log pi(a_t|s_t) * A       (all sub-trajectories share A)
+    i.e. every token across every summarized sub-trajectory — **including summary tokens** —
+    is trained with the same outcome advantage. `rollout` is a `rl.supo.SUPORollout` (duck-typed).
+
+    Overlong masking (essential per the SUPO ablation — without it summarization collapses):
+    rollouts that hit the turn/summary limit are dropped (no gradient).
+    """
+    if overlong_mask and getattr(rollout, "hit_limit", False):
+        return []
+    R = float(rollout.outcome_u_g)
+    return [
+        {
+            "group_key": rollout.task_id,
+            "messages": [m.to_openai() for m in s.context],
+            "response": s.output,
+            "reward": R,                 # shared across all segments → shared group-relative advantage
+            "is_summary": s.is_summary,
+            "segment": s.segment,
+        }
+        for s in rollout.segments
+    ]

@@ -1,0 +1,22 @@
+# SUPO (arXiv 2510.06727) config — reimplementation on slime with the G2 memory component.
+# Consumed by harness_rl/rl/train_supo.py on a GPU box. Validate rollout mechanics first:
+#   hrl-supo-check --stub                                             # offline
+#   hrl-supo-check --model Qwen/Qwen2.5-Coder-3B-Instruct --base-url http://localhost:30000/v1
+model: Qwen/Qwen2.5-Coder-3B-Instruct
+benchmark: livecodebench          # real host-native reward (LiveCodeExecEnv), no Docker
+
+# SUPO context management (G2, replace-mode, policy-generated summaries)
+context_L: 4096                   # token threshold L → policy summarization action fires (tune so it compacts under 3B)
+max_turns: 40
+max_summaries: 8                  # overlong beyond this → masked (essential per SUPO ablation)
+recency_turns: 4
+overlong_mask: true
+
+# GRPO / slime — credit assignment = Thm 3.2 (per-segment samples share the group-relative outcome advantage)
+group_size: 8
+lr: 1.0e-6
+kl_coef: 0.001
+backend: megatron                 # Qwen → Megatron; dense Gemma would auto-fall-back to FSDP
+served_base_url: http://localhost:30000/v1   # slime's SGLang endpoint
+num_gpus: 8
+out_dir: ./supo_runs

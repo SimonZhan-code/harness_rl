@@ -67,6 +67,41 @@ def build_generate_fn(
     return generate
 
 
+def build_supo_generate_fn(
+    benchmark: str,
+    served_base_url: str,
+    model_name: str,
+    cfg,                       # rl.supo.SUPORolloutConfig
+    overlong_mask: bool = True,
+) -> Callable[[Any, dict, Any], dict]:
+    """SUPO custom-generate (arXiv 2510.06727).
+
+    Unlike `build_generate_fn` (one masked trace per rollout), a SUPO rollout emits **multiple**
+    training samples — ONE per sub-trajectory segment (tool-use AND summary turns) — all sharing
+    the rollout's outcome reward and `group_key`. slime GRPO groups by `group_key` and applies the
+    group-relative advantage to every sample's tokens → Thm 3.2's sub-trajectory decomposition.
+    See `rl/supo.py:supo_rollout` and `rl/reward.py:supo_samples`.
+    """
+    from harness_rl.rl.reward import supo_samples
+    from harness_rl.rl.supo import supo_rollout
+
+    adapter = make_benchmark(benchmark)
+    model = ModelClient.for_sglang(served_model=model_name, base_url=served_base_url)
+
+    def generate(args: Any, sample: dict, sampling_params: Any) -> dict:  # pragma: no cover
+        task = _sample_to_task(sample, benchmark)
+        env = adapter.make_env(task)
+        rollout = supo_rollout(task, env, model, cfg, system_prompt=adapter.system_prompt())
+        return {
+            "samples": supo_samples(rollout, overlong_mask=overlong_mask),  # per-segment, shared reward
+            "outcome_u_g": rollout.outcome_u_g,
+            "num_summaries": rollout.num_summaries,
+            "hit_limit": rollout.hit_limit,
+        }
+
+    return generate
+
+
 def _sample_to_task(sample: dict, benchmark: str) -> TaskSpec:
     if isinstance(sample.get("task"), TaskSpec):
         return sample["task"]

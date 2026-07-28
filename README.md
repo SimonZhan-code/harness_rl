@@ -22,7 +22,8 @@ harness_rl/
                      #           gamedev, gamecraft, webgame (+ LocalShellEnv/DockerEnv/EnvStub)
   logging/           # step-segmented Trace JSONL (logs Γ's kept/dropped/summarized/retrieved)
   eval/              # Step 1 Γ variance probe (GammaProbe, spread_table, `hrl-probe` CLI)
-  rl/                # Step 2 ONLY: env.py (neutral rollout), slime_adapter.py, reward.py, train_grpo.py
+  rl/                # Step 2: env.py, slime_adapter.py, reward.py, train_grpo.py
+                     #         + SUPO (2510.06727): supo.py, train_supo.py, supo_check.py
 ```
 
 ## Environments (dual)
@@ -51,6 +52,23 @@ bundling the CUDA-13 runtime, so no separate CUDA toolkit install is needed.
 | **swebench_lite** · **swebench_verified** | SWE (300 lite / 500 human-verified) | FAIL/PASS tests | graded=yes | inference host-native, graded (Docker) deferred |
 | gamedev · **gamecraft** | Godot games | unit tests / rubric judge | no | gaming eval (gamecraft = eval-only) |
 | webgame | browser games | LLM judge | no | eval-only |
+
+## SUPO (arXiv 2510.06727) reimplementation
+
+Summarization-augmented Policy Optimization, on our slime infra with the **G2** memory component.
+When the working context exceeds a token threshold **L**, the **policy itself** generates a
+summary (a trainable action) that compacts history and opens a new **sub-trajectory**. Credit
+assignment is **Theorem 3.2**: one training sample per segment (tool-use **and** summary turns),
+all sharing the **group-relative outcome advantage**; overlong rollouts are masked.
+Target: **Qwen2.5-Coder-3B**, **LiveCodeBench**, **max 40 turns**, `L` configurable (default 4096).
+
+```bash
+hrl-supo-check --stub                 # offline: assert compaction fires + Thm-3.2 sample structure
+hrl-supo-check --model Qwen/Qwen2.5-Coder-3B-Instruct --base-url http://localhost:30000/v1  # real 3B
+python -m harness_rl.rl.train_supo    # prints the slime launch (run on a GPU box)
+```
+Code: `rl/supo.py` (rollout + segmentation), `rl/reward.py:supo_samples` (Thm 3.2), `rl/train_supo.py`
+(launch), `gamma/g2_summarize.py` (`compact_at_tokens=L`, `summary_mode="replace"`).
 
 Memory architectures (Γ) swept by the probe: **G0** truncate · **G1** retrieval · **G2** summarize ·
 **G3** structured-scratchpad · **G5** external/hierarchical (summary + archival retrieval + recency).
