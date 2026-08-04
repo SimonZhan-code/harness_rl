@@ -116,8 +116,9 @@ def reward_matrices(trees: list[TreeRollout], overlong_mask: bool = True) -> lis
     """Extract one `M x K` reward matrix per BRANCH ANCHOR, for `rl/variance.py`.
 
     Each anchor (a node whose children are >1 sibling summaries) becomes a matrix whose row m is
-    the list of leaf outcomes under sibling summary m. Rows are ragged when the leaf budget was
-    allocated unevenly — `variance.task_ss` handles that, and the uneven K is itself worth seeing.
+    the list of leaf outcomes under sibling summary m. Under depth budgeting rows are equal-length
+    by construction; they can still go ragged when a branch terminates early (submit), which is
+    real signal rather than a traversal artifact. `variance.task_ss` handles ragged rows either way.
     """
     out: list[list[list[float]]] = []
     for t in trees:

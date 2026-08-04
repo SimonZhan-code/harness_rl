@@ -7,9 +7,11 @@ A summary's **subtree value** (mean outcome of the leaves under it) scores it *r
 siblings at the same anchor* — a GiGPO-style step group manufactured exactly where the domain
 (LiveCodeBench/SWE states rarely recur) would give none, plus a critic-free tree-backup baseline.
 
-Scope: **summary branching only** — action turns stay linear within a branch. Branch at EVERY
-compaction, bounded by a `max_leaves` budget (progressive widening; DFS, so budget allocation is
-order-dependent — documented). The advantage math (macro GRPO + micro GiGPO) lives in
+Scope: **summary branching only** — action turns stay linear within a branch. Branching is budgeted
+by **DEPTH** (`branch_depth`): every path branches at its first `branch_depth` compactions, so the
+policy is symmetric and sibling subtrees are equal-sized by construction (B**depth leaves).
+`max_leaves` is only a safety clamp that lowers the depth. The advantage math (macro GRPO +
+micro GiGPO) lives in
 `rl/tree_reward.py`. Env forking (`env.fork()`) and G2 cloning (`gamma.clone()` +
 `pending_compaction`/`apply_summary`) make independent branches possible.
 """
@@ -59,9 +61,31 @@ class TreeConfig:
     max_summaries: int = 8           # summarization cap per path (overlong beyond)
     recency_turns: int = 4
     branch_factor: int = 3           # B summaries sampled per compaction
-    max_leaves: int = 12             # progressive-widening budget across the whole tree
+    # BUDGET BY DEPTH, NOT LEAF COUNT. Branch at the first `branch_depth` compactions along every
+    # path, so the policy is symmetric and sibling subtrees are the same size by construction
+    # (B**branch_depth leaves when every path compacts that often).
+    #
+    # The old leaf-count budget ("branch while committed_leaves + B-1 <= max_leaves") was spent in
+    # DFS order, so the FIRST sibling's subtree absorbed the remainder and the rest got one leaf
+    # each — e.g. B=2, max_leaves=8 gave [7, 1]. That made V(s_i) estimates wildly unequal in
+    # precision across siblings being contrasted, inflating sigma_sibling with estimation noise and
+    # biasing eta^2 upward. Depth-budgeting removes that artifact entirely; any residual imbalance
+    # is then real (a branch that submitted early genuinely has fewer leaves), not traversal order.
+    branch_depth: int = 1
+    max_leaves: int = 12             # SAFETY CLAMP only: depth is reduced until B**depth <= this
     summary_temperature: float = 0.9  # higher temp → diverse sibling summaries
     max_tokens: int = 2048
+
+    def effective_depth(self) -> int:
+        """Branch depth after the `max_leaves` safety clamp. Clamping reduces DEPTH (keeping the
+        tree balanced) rather than truncating breadth mid-traversal."""
+        if self.branch_factor < 2 or self.branch_depth < 1:
+            return 0
+        d, leaves = 0, 1
+        while d < self.branch_depth and leaves * self.branch_factor <= self.max_leaves:
+            leaves *= self.branch_factor
+            d += 1
+        return d
     # Which terminations get overlong-MASKED. SUPO's ablation masks trajectories that don't finish,
     # so ("budget","max_summaries") is the faithful default. But the two differ in kind:
     #   max_summaries = a real context-management failure (what SUPO's masking is about);
@@ -95,7 +119,7 @@ class _TreeBuilder:
         self.cfg = cfg
         self.sp = system_prompt
         self.roll = TreeRollout(task_id=task.task_id)
-        self.slots = 1  # committed leaf slots (progressive widening: branching adds B-1)
+        self.eff_depth = cfg.effective_depth()  # branch at the first `eff_depth` compactions
 
     # --- tree bookkeeping -------------------------------------------------
     def _new(self, parent: int | None, is_summary: bool, seg: SegmentTurn) -> int:
@@ -110,8 +134,10 @@ class _TreeBuilder:
                  Message(role=Role.USER, content=f"Task:\n{self.task.instruction}")]
                 + list(to_sum) + [Message(role=Role.USER, content=SUMMARIZE_PROMPT)])
 
-    def _can_branch(self) -> bool:
-        return self.slots + (self.cfg.branch_factor - 1) <= self.cfg.max_leaves
+    def _can_branch(self, depth: int) -> bool:
+        """Depth-symmetric: EVERY path branches at its first `eff_depth` compactions. No global
+        counter, so traversal order cannot decide which sibling gets the remaining budget."""
+        return depth < self.eff_depth
 
     def _record_summary(self, gamma: G2Summarize, parent: int | None, seg_id: int,
                         to_sum: list[Message], chat) -> int:
@@ -137,11 +163,11 @@ class _TreeBuilder:
         gamma.reset(self.task, self.sp)
         obs = env.reset()
         gamma.on_step(obs, action=None)  # seed with the initial observation
-        self._segment(gamma, env, seg_id=0, parent_id=None, turns=0, summaries=0)
+        self._segment(gamma, env, seg_id=0, parent_id=None, turns=0, summaries=0, depth=0)
         return self.roll
 
     def _segment(self, gamma: G2Summarize, env: Environment, seg_id: int, parent_id: int | None,
-                 turns: int, summaries: int) -> None:
+                 turns: int, summaries: int, depth: int) -> None:
         last = parent_id
         while True:
             if summaries > self.cfg.max_summaries:
@@ -153,10 +179,10 @@ class _TreeBuilder:
 
             to_sum = gamma.pending_compaction(self.cfg.context_L)
             if to_sum is not None:
-                if self._can_branch():
-                    self._branch(gamma, env, seg_id, last, to_sum, turns, summaries)
+                if self._can_branch(depth):
+                    self._branch(gamma, env, seg_id, last, to_sum, turns, summaries, depth)
                     return                                        # children own continuation + env
-                # budget exhausted → single summary, continue this path linearly (B=1)
+                # past branch depth → single summary, continue this path linearly (B=1)
                 chat = self.model.chat_many(self._summ_ctx(to_sum), n=1,
                                             temperature=self.cfg.summary_temperature)[0]
                 last = self._record_summary(gamma, last, seg_id + 1, to_sum, chat)
@@ -183,15 +209,14 @@ class _TreeBuilder:
                 gamma.on_step(obs, action)
 
     def _branch(self, gamma: G2Summarize, env: Environment, seg_id: int, parent_id: int | None,
-                to_sum: list[Message], turns: int, summaries: int) -> None:
+                to_sum: list[Message], turns: int, summaries: int, depth: int) -> None:
         summs = self.model.chat_many(self._summ_ctx(to_sum), n=self.cfg.branch_factor,
                                      temperature=self.cfg.summary_temperature)
-        self.slots += (len(summs) - 1)                            # commit the extra leaf slots
-        for chat in summs:
-            g2 = gamma.clone()
+        for chat in summs:                       # every sibling recurses at the SAME depth+1,
+            g2 = gamma.clone()                   # so none can absorb another's share of the budget
             e2 = fork_env(env)
             sid = self._record_summary(g2, parent_id, seg_id + 1, to_sum, chat)
-            self._segment(g2, e2, seg_id + 1, sid, turns, summaries + 1)
+            self._segment(g2, e2, seg_id + 1, sid, turns, summaries + 1, depth + 1)
         env.close()                                               # parent env done; forks live on
 
 

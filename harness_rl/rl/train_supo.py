@@ -30,7 +30,8 @@ class SUPOConfig:
     # Summary-branching TREE rollout (rl/tree_supo.py); tree=False → flat SUPO
     tree: bool = False
     branch_factor: int = 3         # B summaries sampled per compaction
-    max_leaves: int = 12           # progressive-widening leaf budget per tree
+    branch_depth: int = 1          # branch at the first D compactions (balanced; B**D leaves)
+    max_leaves: int = 12           # safety clamp only — lowers D until B**D <= max_leaves
     summary_temperature: float = 0.9
     w_micro: float = 1.0           # weight on the GiGPO sibling-relative summary term
     micro_baseline: str = "loo"    # "loo" | "mean"
@@ -57,8 +58,8 @@ def tree_config(cfg: SUPOConfig):
     from harness_rl.rl.tree_supo import TreeConfig
     return TreeConfig(context_L=cfg.context_L, max_turns=cfg.max_turns,
                       max_summaries=cfg.max_summaries, recency_turns=cfg.recency_turns,
-                      branch_factor=cfg.branch_factor, max_leaves=cfg.max_leaves,
-                      summary_temperature=cfg.summary_temperature,
+                      branch_factor=cfg.branch_factor, branch_depth=cfg.branch_depth,
+                      max_leaves=cfg.max_leaves, summary_temperature=cfg.summary_temperature,
                       mask_reasons=tuple(cfg.mask_reasons))
 
 
@@ -144,14 +145,16 @@ def _parse_args() -> SUPOConfig:
     p.add_argument("--served-base-url", default=SUPOConfig.served_base_url)
     p.add_argument("--tree", action="store_true", help="summary-branching tree rollout (rl/tree_supo.py)")
     p.add_argument("--branch-factor", type=int, default=SUPOConfig.branch_factor)
+    p.add_argument("--branch-depth", type=int, default=SUPOConfig.branch_depth,
+                   help="branch at the first D compactions (balanced tree, B**D leaves)")
     p.add_argument("--max-leaves", type=int, default=SUPOConfig.max_leaves)
     p.add_argument("--w-micro", type=float, default=SUPOConfig.w_micro)
     a = p.parse_args()
     return SUPOConfig(model=a.model, benchmark=a.benchmark, context_L=a.context_L,
                       max_turns=a.max_turns, max_summaries=a.max_summaries,
                       num_gpus=a.num_gpus, served_base_url=a.served_base_url,
-                      tree=a.tree, branch_factor=a.branch_factor, max_leaves=a.max_leaves,
-                      w_micro=a.w_micro)
+                      tree=a.tree, branch_factor=a.branch_factor, branch_depth=a.branch_depth,
+                      max_leaves=a.max_leaves, w_micro=a.w_micro)
 
 
 if __name__ == "__main__":  # pragma: no cover

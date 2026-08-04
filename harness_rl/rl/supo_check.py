@@ -109,7 +109,8 @@ def _print_tree_advantages(trees, w_micro: float) -> None:
     print(f"  samples={len(samples)} (summary={sum(1 for s in samples if s['is_summary'])})")
 
 
-def _tree_stub_check(branch_factor: int, max_leaves: int, w_micro: float) -> None:
+def _tree_stub_check(branch_factor: int, max_leaves: int, w_micro: float,
+                     branch_depth: int = 1) -> None:
     """Offline mechanics check for the summary-branching tree + macro/micro advantages."""
     from harness_rl.benchmarks.base import EnvStub
     from harness_rl.rl.tree_reward import tree_advantages
@@ -135,7 +136,8 @@ def _tree_stub_check(branch_factor: int, max_leaves: int, w_micro: float) -> Non
         return seq[(cnt["n"] - 1) % len(seq)]
 
     cfg = TreeConfig(context_L=600, max_turns=14, max_summaries=6, recency_turns=3,
-                     branch_factor=branch_factor, max_leaves=max_leaves, summary_temperature=0.9)
+                     branch_factor=branch_factor, branch_depth=branch_depth,
+                     max_leaves=max_leaves, summary_temperature=0.9)
     task = TaskSpec(task_id="stub/tree", benchmark="stub", instruction="demo task")
     env = EnvStub(observations=["obs " + ("token " * 300)] * 40, verify_hook=verify_hook)
     t = tree_supo_rollout(task, env, StubModel(make_responder()), cfg, system_prompt="SYS")
@@ -181,6 +183,8 @@ def main() -> None:
                    help="offline check of the summary-branching tree + macro/micro advantages")
     p.add_argument("--tree", action="store_true", help="real run using the tree rollout")
     p.add_argument("--branch-factor", type=int, default=3, help="B summaries per compaction")
+    p.add_argument("--branch-depth", type=int, default=1,
+                   help="branch at the first D compactions (balanced; B**D leaves)")
     p.add_argument("--max-leaves", type=int, default=4, help="leaf budget per tree")
     p.add_argument("--w-micro", type=float, default=1.0, help="weight on the sibling-relative term")
     p.add_argument("--group-size", type=int, default=2, help="trees per task (tree mode)")
@@ -195,7 +199,7 @@ def main() -> None:
     a = p.parse_args()
 
     if a.tree_stub:
-        _tree_stub_check(a.branch_factor, a.max_leaves, a.w_micro)
+        _tree_stub_check(a.branch_factor, a.max_leaves, a.w_micro, a.branch_depth)
         return
 
     if a.stub:
@@ -230,7 +234,7 @@ def main() -> None:
     if a.tree:   # real summary-branching tree run against a served model
         from harness_rl.rl.tree_supo import TreeConfig, tree_supo_rollout
         tcfg = TreeConfig(context_L=a.context_L, max_turns=40, branch_factor=a.branch_factor,
-                          max_leaves=a.max_leaves,
+                          branch_depth=a.branch_depth, max_leaves=a.max_leaves,
                           mask_reasons=("max_summaries",) if a.grade_turn_exhausted
                           else ("budget", "max_summaries"))
         for task in bench.subset(a.n_tasks, long_horizon=False):

@@ -109,8 +109,14 @@ bootstrapping, so with terminal-only reward the backup *is* the return):
 `A_macro = (V(n) − μ)/(σ+ε)` over the group's leaves (GRPO); `A_micro = (V(sᵢ) − baseline_{-i})/(σ_sib+ε)`
 over summary siblings (GiGPO, leave-one-out default). `w_micro=0` reduces **exactly** to flat SUPO
 (regression guard + ablation baseline). Overlong leaves are excluded from the backup *and* the
-samples. Shared-prefix nodes appear once → no gradient double-counting. Growth is bounded by a
-`max_leaves` progressive-widening budget (DFS, so allocation is order-dependent).
+samples. Shared-prefix nodes appear once → no gradient double-counting.
+
+**Branching is budgeted by DEPTH, not leaf count.** Every path branches at its first
+`branch_depth` compactions, so sibling subtrees are equal-sized by construction (`B**depth` leaves)
+and `max_leaves` is only a safety clamp that *lowers the depth*. The earlier leaf-count budget was
+spent in DFS order, so the first sibling's subtree absorbed the remainder (`B=2, max_leaves=8` gave
+`[7, 1]`) — meaning contrasted summaries had wildly unequal value-estimate precision, which
+inflates `σ_sibling` with estimation noise and biases η² upward. Balance is now a regression test.
 
 ```bash
 hrl-supo-check --tree-stub --branch-factor 3 --max-leaves 6     # offline: tree + macro/micro table

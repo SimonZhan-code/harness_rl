@@ -236,7 +236,42 @@ def test_g2_external_compaction_hooks_and_clone():
     assert len(a.history) != len(b.history), "cloned history lists must be independent"
 
 
-def _tree_stub(branch_factor=2, max_leaves=4, u_seq=(1.0, 0.0, 0.5, 1.0)):
+def test_branch_budget_is_depth_symmetric_not_leaf_count():
+    """Regression: the old leaf-count budget was spent in DFS order, so the first sibling's subtree
+    absorbed the remainder (B=2, max_leaves=8 gave [7, 1]). Depth budgeting must give equal-sized
+    sibling subtrees at every anchor, and exactly B**depth leaves."""
+    from harness_rl.rl.tree_supo import TreeConfig
+
+    def leaves_under(t, nid):
+        n, seen = 0, [nid]
+        while seen:
+            node = t.nodes[seen.pop()]
+            if not node.children:
+                n += 1
+            else:
+                seen.extend(node.children)
+        return n
+
+    for B, depth in ((2, 1), (2, 2), (2, 3), (3, 2), (4, 1)):
+        t = _tree_stub(branch_factor=B, max_leaves=64, branch_depth=depth, never_submit=True)
+        anchors = [n for n in t.nodes if len([c for c in n.children if t.nodes[c].is_summary]) > 1]
+        assert len(anchors) == (B ** depth - 1) // (B - 1), f"B={B} depth={depth}: anchor count"
+        assert len(t.leaves) == B ** depth, f"B={B} depth={depth}: leaves must be B**depth"
+        for a in anchors:
+            sizes = {leaves_under(t, c) for c in a.children}
+            assert len(sizes) == 1, f"B={B} depth={depth}: unbalanced sibling subtrees {sizes}"
+
+
+def test_max_leaves_clamps_depth_keeping_balance():
+    from harness_rl.rl.tree_supo import TreeConfig
+    assert TreeConfig(branch_factor=4, branch_depth=2, max_leaves=12).effective_depth() == 1
+    assert TreeConfig(branch_factor=4, branch_depth=2, max_leaves=16).effective_depth() == 2
+    assert TreeConfig(branch_factor=2, branch_depth=5, max_leaves=8).effective_depth() == 3
+    assert TreeConfig(branch_factor=1, branch_depth=3).effective_depth() == 0   # B=1 = no branching
+
+
+def _tree_stub(branch_factor=2, max_leaves=4, u_seq=(1.0, 0.0, 0.5, 1.0), branch_depth=1,
+               never_submit=False):
     from harness_rl.benchmarks.base import EnvStub
     from harness_rl.rl.tree_supo import TreeConfig, tree_supo_rollout
     from harness_rl.serving.client import StubModel
@@ -248,6 +283,8 @@ def _tree_stub(branch_factor=2, max_leaves=4, u_seq=(1.0, 0.0, 0.5, 1.0)):
             st["s"] += 1
             return f"SUMMARY {st['s']}"
         st["a"] += 1
+        if never_submit:                      # every path runs to the turn cap → equal-depth leaves
+            return "```bash\nls\n```"
         return "```bash\nls\n```" if st["a"] % 4 else "TASK_COMPLETE"
 
     cnt = {"n": 0}
@@ -257,7 +294,8 @@ def _tree_stub(branch_factor=2, max_leaves=4, u_seq=(1.0, 0.0, 0.5, 1.0)):
         return u_seq[(cnt["n"] - 1) % len(u_seq)]
 
     cfg = TreeConfig(context_L=600, max_turns=14, max_summaries=6, recency_turns=3,
-                     branch_factor=branch_factor, max_leaves=max_leaves)
+                     branch_factor=branch_factor, branch_depth=branch_depth,
+                     max_leaves=max_leaves)
     task = TaskSpec(task_id="stub/tree", benchmark="stub", instruction="demo")
     env = EnvStub(observations=["obs " + ("token " * 300)] * 40, verify_hook=hook)
     return tree_supo_rollout(task, env, StubModel(r), cfg, system_prompt="SYS")
