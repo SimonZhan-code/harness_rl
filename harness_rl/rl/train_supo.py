@@ -27,6 +27,16 @@ class SUPOConfig:
     max_summaries: int = 8
     recency_turns: int = 4
     overlong_mask: bool = True     # essential per the SUPO ablation
+    # Summary-branching TREE rollout (rl/tree_supo.py); tree=False → flat SUPO
+    tree: bool = False
+    branch_factor: int = 3         # B summaries sampled per compaction
+    max_leaves: int = 12           # progressive-widening leaf budget per tree
+    summary_temperature: float = 0.9
+    w_micro: float = 1.0           # weight on the GiGPO sibling-relative summary term
+    micro_baseline: str = "loo"    # "loo" | "mean"
+    # ("budget","max_summaries") = faithful SUPO masking; ("max_summaries",) also trains on
+    # turn-exhausted rollouts (needed when the policy rarely emits TASK_COMPLETE — see tree_supo.py)
+    mask_reasons: tuple[str, ...] = ("budget", "max_summaries")
     # GRPO / slime
     group_size: int = 8
     lr: float = 1e-6
@@ -43,14 +53,30 @@ def rollout_config(cfg: SUPOConfig) -> SUPORolloutConfig:
                              max_summaries=cfg.max_summaries, recency_turns=cfg.recency_turns)
 
 
+def tree_config(cfg: SUPOConfig):
+    from harness_rl.rl.tree_supo import TreeConfig
+    return TreeConfig(context_L=cfg.context_L, max_turns=cfg.max_turns,
+                      max_summaries=cfg.max_summaries, recency_turns=cfg.recency_turns,
+                      branch_factor=cfg.branch_factor, max_leaves=cfg.max_leaves,
+                      summary_temperature=cfg.summary_temperature,
+                      mask_reasons=tuple(cfg.mask_reasons))
+
+
 def build_generate_fn(cfg: SUPOConfig):
-    """Instantiate the SUPO custom-generate function bound to our harness."""
+    """Instantiate the SUPO custom-generate function bound to our harness (flat or tree)."""
     from harness_rl.benchmarks import TRAINABLE_BENCHMARKS
-    from harness_rl.rl.slime_adapter import build_supo_generate_fn
 
     if cfg.benchmark not in TRAINABLE_BENCHMARKS:
         raise ValueError(f"{cfg.benchmark} is eval-only; SUPO needs a checkable reward. "
                          f"Trainable: {sorted(TRAINABLE_BENCHMARKS)}")
+    if cfg.tree:
+        from harness_rl.rl.slime_adapter import build_tree_supo_generate_fn
+        return build_tree_supo_generate_fn(
+            benchmark=cfg.benchmark, served_base_url=cfg.served_base_url, model_name=cfg.model,
+            cfg=tree_config(cfg), group_size=cfg.group_size, w_micro=cfg.w_micro,
+            micro_baseline=cfg.micro_baseline, overlong_mask=cfg.overlong_mask,
+        )
+    from harness_rl.rl.slime_adapter import build_supo_generate_fn
     return build_supo_generate_fn(
         benchmark=cfg.benchmark, served_base_url=cfg.served_base_url, model_name=cfg.model,
         cfg=rollout_config(cfg), overlong_mask=cfg.overlong_mask,
@@ -80,14 +106,20 @@ def supo_training_hook_note() -> str:
 def slime_launch_command(cfg: SUPOConfig) -> str:
     backend, _ = resolve_backend(cfg.model, cfg.backend)
     env = "SLIME_BACKEND=fsdp " if backend == "fsdp" else ""
+    rollout_fn = ("harness_rl.rl.slime_adapter:build_tree_supo_generate_fn"
+                  if cfg.tree else cfg.rollout_fn)
+    # tree generate fn owns the whole group + precomputes advantages → group-size 1 at the slime
+    # layer (one generate call = one group of trees); flat SUPO uses slime's own grouping.
     return (
         f"{env}python -m slime.train "
         f"--model {shlex.quote(cfg.model)} "
-        f"--rl-algorithm grpo --group-size {cfg.group_size} "
+        f"--rl-algorithm grpo --group-size {1 if cfg.tree else cfg.group_size} "
         f"--learning-rate {cfg.lr} --kl-coef {cfg.kl_coef} --full-parameter "
-        f"--rollout-function-path {cfg.rollout_fn} "
+        f"--rollout-function-path {rollout_fn} "
         f"--sglang-base-url {cfg.served_base_url} "
         f"--num-gpus {cfg.num_gpus} --save {cfg.out_dir}"
+        + ("  # tree: fn precomputes advantages — configure slime to use them (not reward-grouping)"
+           if cfg.tree else "")
     )
 
 
@@ -110,10 +142,16 @@ def _parse_args() -> SUPOConfig:
     p.add_argument("--max-summaries", type=int, default=SUPOConfig.max_summaries)
     p.add_argument("--num-gpus", type=int, default=SUPOConfig.num_gpus)
     p.add_argument("--served-base-url", default=SUPOConfig.served_base_url)
+    p.add_argument("--tree", action="store_true", help="summary-branching tree rollout (rl/tree_supo.py)")
+    p.add_argument("--branch-factor", type=int, default=SUPOConfig.branch_factor)
+    p.add_argument("--max-leaves", type=int, default=SUPOConfig.max_leaves)
+    p.add_argument("--w-micro", type=float, default=SUPOConfig.w_micro)
     a = p.parse_args()
     return SUPOConfig(model=a.model, benchmark=a.benchmark, context_L=a.context_L,
                       max_turns=a.max_turns, max_summaries=a.max_summaries,
-                      num_gpus=a.num_gpus, served_base_url=a.served_base_url)
+                      num_gpus=a.num_gpus, served_base_url=a.served_base_url,
+                      tree=a.tree, branch_factor=a.branch_factor, max_leaves=a.max_leaves,
+                      w_micro=a.w_micro)
 
 
 if __name__ == "__main__":  # pragma: no cover

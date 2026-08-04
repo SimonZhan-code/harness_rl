@@ -118,6 +118,21 @@ class LocalShellEnv:
         return Outcome(u_g=1.0 if self._submitted else 0.0,
                        terminated_reason="submit" if self._submitted else "budget")
 
+    def fork(self) -> "LocalShellEnv":
+        """Duplicate this env's live state so a branch can continue independently (tree rollout).
+
+        Copies the working directory (the only on-disk mutable state) into a fresh temp dir and
+        the `_submitted` flag; setup_cmds are NOT re-run (the copy already reflects them)."""
+        import shutil
+        import tempfile
+
+        new_wd = tempfile.mkdtemp(prefix="hrl-local-")
+        shutil.copytree(self.workdir, new_wd, dirs_exist_ok=True)
+        env = LocalShellEnv(workdir=new_wd, setup_cmds=[], verify_fn=self.verify_fn,
+                            done_tool=self.done_tool, exec_timeout_s=self.exec_timeout_s)
+        env._submitted = self._submitted
+        return env
+
     def close(self) -> None:
         pass
 
@@ -129,11 +144,15 @@ class EnvStub:
     `verify` returns a preset outcome. Lets us exercise harness+gamma+logging offline.
     """
 
-    def __init__(self, observations: list[str], final_u_g: float = 1.0, done_tool: str = "submit"):
+    def __init__(self, observations: list[str], final_u_g: float = 1.0, done_tool: str = "submit",
+                 verify_hook=None):
         self._obs = observations
         self._i = 0
         self._final = final_u_g
         self._done_tool = done_tool
+        # optional no-arg callable → u_g; SHARED across forks so a stateful closure can hand each
+        # leaf (verify() is called once per leaf) a distinct outcome — used by the tree-rollout stub.
+        self._verify_hook = verify_hook
 
     def reset(self) -> Observation:
         self._i = 0
@@ -148,8 +167,15 @@ class EnvStub:
         return bool(action and action.tool == self._done_tool)
 
     def verify(self) -> Outcome:
-        return Outcome(u_g=self._final, passed_tests=int(self._final), total_tests=1,
-                       terminated_reason="submit")
+        u = self._verify_hook() if self._verify_hook is not None else self._final
+        return Outcome(u_g=u, passed_tests=int(u), total_tests=1, terminated_reason="submit")
+
+    def fork(self) -> "EnvStub":
+        """Duplicate the scripted cursor so a branch continues from the same point (tree rollout)."""
+        env = EnvStub(observations=self._obs, final_u_g=self._final, done_tool=self._done_tool,
+                      verify_hook=self._verify_hook)
+        env._i = self._i
+        return env
 
     def close(self) -> None:
         pass

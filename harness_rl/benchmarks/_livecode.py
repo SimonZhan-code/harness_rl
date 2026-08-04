@@ -151,5 +151,19 @@ class LiveCodeExecEnv:
         return Outcome(u_g=u_g, passed_tests=passed, total_tests=total,
                        terminated_reason="submit" if self._submitted else "budget")
 
+    def fork(self) -> "LiveCodeExecEnv":
+        """Duplicate live state so a branch continues independently (tree rollout). Copies the
+        working dir (solution.py + any agent-created files) into a fresh temp dir; the test lists
+        are read-only and shared. `verify()` re-grades each fork's OWN workdir against private tests."""
+        import shutil
+
+        new_wd = tempfile.mkdtemp(prefix="hrl-lcb-")
+        shutil.copytree(self.workdir, new_wd, dirs_exist_ok=True)
+        env = LiveCodeExecEnv(public_tests=self.public_tests, private_tests=self.private_tests,
+                              fn_name=self.fn_name, workdir=new_wd, timeout_s=self.timeout_s,
+                              done_tool=self.done_tool)
+        env._submitted = self._submitted
+        return env
+
     def close(self) -> None:
         pass

@@ -102,6 +102,52 @@ def build_supo_generate_fn(
     return generate
 
 
+def build_tree_supo_generate_fn(
+    benchmark: str,
+    served_base_url: str,
+    model_name: str,
+    cfg,                       # rl.tree_supo.TreeConfig
+    group_size: int,
+    w_micro: float = 1.0,
+    micro_baseline: str = "loo",
+    overlong_mask: bool = True,
+) -> Callable[[Any, dict, Any], dict]:
+    """Summary-branching TREE SUPO custom-generate (see rl/tree_supo.py, rl/tree_reward.py).
+
+    Unlike the flat-SUPO generate fn (which emits per-segment samples sharing a scalar reward and
+    lets slime compute the group-relative advantage), this fn owns the WHOLE group: it samples
+    `group_size` rollout **trees** for the task, backs up subtree values, and computes the final
+    two-level advantage (macro GRPO across the group's leaves + micro GiGPO across summary
+    siblings). It emits samples carrying a PRECOMPUTED `advantage`.
+
+    ⚠️ Integration point (verify on the GPU box): slime must be configured to consume the given
+    per-sample `advantage` and NOT re-normalize a group-relative advantage from a reward. If the
+    installed slime can't, fall back to emitting `reward=V(node)` for slime's macro and passing the
+    micro term as an additive per-sample bonus via slime's advantage hook.
+    """
+    from harness_rl.rl.tree_reward import tree_samples
+    from harness_rl.rl.tree_supo import tree_supo_rollout
+
+    adapter = make_benchmark(benchmark)
+    model = ModelClient.for_sglang(served_model=model_name, base_url=served_base_url)
+
+    def generate(args: Any, sample: dict, sampling_params: Any) -> dict:  # pragma: no cover
+        task = _sample_to_task(sample, benchmark)
+        trees = [tree_supo_rollout(task, adapter.make_env(task), model, cfg,
+                                   system_prompt=adapter.system_prompt())
+                 for _ in range(group_size)]
+        samples, stats = tree_samples(trees, w_micro=w_micro, micro_baseline=micro_baseline,
+                                      overlong_mask=overlong_mask)
+        return {
+            "samples": samples,                    # per-node, PRECOMPUTED advantage
+            "group_stats": stats,
+            "num_summaries": sum(t.num_summaries for t in trees),
+            "num_leaves": sum(len(t.leaves) for t in trees),
+        }
+
+    return generate
+
+
 def _sample_to_task(sample: dict, benchmark: str) -> TaskSpec:
     if isinstance(sample.get("task"), TaskSpec):
         return sample["task"]

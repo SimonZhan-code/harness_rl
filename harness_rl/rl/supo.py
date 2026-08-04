@@ -89,6 +89,11 @@ class SUPORolloutConfig:
     max_summaries: int = 8    # summarization-round cap (overlong beyond this)
     recency_turns: int = 4
     max_tokens: int = 2048    # per-call generation cap
+    # Which terminations get overlong-MASKED — mirrors rl/tree_supo.py:TreeConfig.mask_reasons so
+    # the flat baseline and the tree can be compared under IDENTICAL masking (a fair ablation).
+    # ("budget","max_summaries") = faithful SUPO; ("max_summaries",) also trains turn-exhausted
+    # rollouts (needed when the policy rarely submits — measured: Qwen2.5-Coder-3B, 0/20 turns).
+    mask_reasons: tuple[str, ...] = ("budget", "max_summaries")
 
 
 @dataclass
@@ -159,7 +164,8 @@ def supo_rollout(task: TaskSpec, env: Environment, model: ModelClient,
     outcome = env.verify()
     roll.outcome_u_g = outcome.u_g
     roll.turns = sum(1 for s in roll.segments if not s.is_summary)
-    roll.hit_limit = hit or reason == "max_summaries"
+    roll.hit_limit = reason in cfg.mask_reasons   # "submit" is never masked
+    _ = hit
     roll.terminated_reason = reason
     env.close()
     return roll

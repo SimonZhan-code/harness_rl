@@ -88,6 +88,58 @@ summary collapse (the SUPO failure mode); summary-KL spike = summarizer drifting
 `hrl-supo-check` prints the table with synthetic per-token values (mechanics demo — real values come
 from the trainer).
 
+### Summary-branching TREE rollout (extension — variance-reduced summary credit)
+
+Flat SUPO gives summary **and** action tokens the *same* outcome advantage (Thm 3.2), so summary
+quality and action quality are never disentangled — the highest-leverage decision gets the noisiest
+signal. The tree fixes that: at **every** compaction, sample **B** summaries from the *same*
+pre-summary context and roll each forward independently (`env.fork()` + `G2.clone()`). A summary's
+**subtree value** (mean leaf `u_g`) scores it *against its siblings at a shared anchor* — a
+GiGPO-style step group manufactured exactly where LiveCodeBench/SWE states never recur. **Summary
+branching only**; action turns stay linear.
+
+Two-level credit (`rl/tree_reward.py`), critic-free (Monte-Carlo subtree backup, λ=1 — no
+bootstrapping, so with terminal-only reward the backup *is* the return):
+
+| | advantage |
+|---|---|
+| action node | `A_macro` |
+| summary node | `A_macro + w·A_micro` |
+
+`A_macro = (V(n) − μ)/(σ+ε)` over the group's leaves (GRPO); `A_micro = (V(sᵢ) − baseline_{-i})/(σ_sib+ε)`
+over summary siblings (GiGPO, leave-one-out default). `w_micro=0` reduces **exactly** to flat SUPO
+(regression guard + ablation baseline). Overlong leaves are excluded from the backup *and* the
+samples. Shared-prefix nodes appear once → no gradient double-counting. Growth is bounded by a
+`max_leaves` progressive-widening budget (DFS, so allocation is order-dependent).
+
+```bash
+hrl-supo-check --tree-stub --branch-factor 3 --max-leaves 6     # offline: tree + macro/micro table
+hrl-supo-check --tree --base-url http://localhost:30000/v1 \
+               --context-L 1500 --branch-factor 3 --max-leaves 6 --n-tasks 1   # real served model
+python -m harness_rl.rl.train_supo --tree --branch-factor 3 --max-leaves 12 --w-micro 1.0
+```
+Code: `rl/tree_supo.py` (branching rollout), `rl/tree_reward.py` (backup + macro/micro + samples),
+`rl/slime_adapter.py:build_tree_supo_generate_fn`, `gamma/g2_summarize.py`
+(`pending_compaction`/`apply_summary`/`clone`), `serving/client.py:chat_many`, `Environment.fork()`.
+⚠️ Tree samples carry a **precomputed `advantage`** (not a reward) — slime must be configured to use
+it instead of re-deriving a group-relative advantage; fallback noted in the adapter docstring.
+
+**Validated on an H100 NVL (driver 580) serving Qwen2.5-Coder-3B-Instruct on LiveCodeBench:**
+`chat_many(n=3)` returns 3 distinct summaries in one SGLang request; branching fires at summary
+nodes only; `LiveCodeExecEnv.fork()` gives each branch an independent workdir; real `u_g` flows
+through the subtree backup into macro/micro advantages.
+
+> **Measured gotcha — `mask_reasons`.** Qwen2.5-Coder-3B **never emits `TASK_COMPLETE`** (0 submits
+> in 20 action turns; all outputs parsed fine) even when it *solves* the task (`u_g=1.0`). Under
+> faithful SUPO masking (`("budget","max_summaries")`) every rollout is overlong → **zero gradient
+> per batch** — for flat SUPO too. So both `TreeConfig` and `SUPORolloutConfig` expose
+> **`mask_reasons`**: `max_summaries` is a genuine context-management failure (what SUPO's ablation
+> is about), while `budget` just means the agent used its turns — and LiveCodeBench still grades the
+> artifact on disk, so `u_g` is meaningful. Set `mask_reasons=("max_summaries",)` (CLI:
+> `--grade-turn-exhausted`) to train on turn-exhausted rollouts. Keep it **identical** across flat
+> and tree runs or the ablation is unfair. `tree_reward` stats also flag `all_masked` and
+> `degenerate_group` (σ=0 → macro teaches nothing; only the micro term can).
+
 Memory architectures (Γ) swept by the probe: **G0** truncate · **G1** retrieval · **G2** summarize ·
 **G3** structured-scratchpad · **G5** external/hierarchical (summary + archival retrieval + recency).
 

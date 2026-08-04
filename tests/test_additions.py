@@ -7,7 +7,7 @@ import tempfile
 from harness_rl.benchmarks import BENCHMARK_REGISTRY, TRAINABLE_BENCHMARKS
 from harness_rl.benchmarks._livecode import decode_tests, run_tests
 from harness_rl.gamma import GAMMA_REGISTRY, make_gamma
-from harness_rl.types import Action, Observation, TaskSpec
+from harness_rl.types import Action, Message, Observation, Role, TaskSpec
 
 
 def test_new_benchmarks_registered():
@@ -196,6 +196,260 @@ def test_entropy_from_logprobs_matches_uniform():
     assert abs(entropy_from_logprobs(uniform) - math.log(k)) < 1e-9   # H(uniform) = log k
     peaked = [math.log(0.97)] + [math.log(0.01)] * 3
     assert entropy_from_logprobs(peaked) < entropy_from_logprobs(uniform)
+
+
+# --- summary-branching TREE rollout + macro/micro advantages ---
+
+def test_env_fork_isolates_state():
+    from harness_rl.benchmarks._livecode import LiveCodeExecEnv
+    from harness_rl.benchmarks.base import EnvStub
+    env = LiveCodeExecEnv(public_tests=[], private_tests=[{"input": "", "output": ""}])
+    env.reset()
+    open(os.path.join(env.workdir, "solution.py"), "w").write("print(1)\n")
+    f = env.fork()
+    assert f.workdir != env.workdir
+    assert open(os.path.join(f.workdir, "solution.py")).read() == "print(1)\n"   # copied
+    open(os.path.join(f.workdir, "solution.py"), "w").write("print(2)\n")        # diverge
+    assert open(os.path.join(env.workdir, "solution.py")).read() == "print(1)\n"  # isolated
+    s = EnvStub(observations=["a", "b", "c"])
+    s.reset()
+    s.execute(Action(tool="bash", args={}, raw="x"))
+    assert s.fork()._i == s._i
+
+
+def test_g2_external_compaction_hooks_and_clone():
+    g = make_gamma("G2_summarize", recency_turns=2, compact_at_tokens=200,
+                   summary_mode="replace", summarizer=lambda m: "SHOULD_NOT_FIRE")
+    g.reset(TaskSpec(task_id="t", benchmark="x", instruction="go"), "SYS")
+    for _ in range(6):
+        g.on_step(Observation(text="obs " + ("word " * 80)), Action(tool="bash", args={}, raw="x"))
+    to_sum = g.pending_compaction(200)
+    assert to_sum, "pending_compaction must detect the over-L condition"
+    assert g._summary == "", "pending_compaction must NOT mutate state"
+    a, b = g.clone(), g.clone()
+    a.apply_summary("SUMMARY A", 200)
+    b.apply_summary("SUMMARY B", 200)
+    assert (a._summary, b._summary) == ("SUMMARY A", "SUMMARY B")   # branches independent
+    assert g._summary == ""                                          # parent untouched
+    assert a.pending_compaction(200) is None, "after apply_summary no compaction is pending"
+    a.on_step(Observation(text="new"), Action(tool="bash", args={}, raw="y"))
+    assert len(a.history) != len(b.history), "cloned history lists must be independent"
+
+
+def _tree_stub(branch_factor=2, max_leaves=4, u_seq=(1.0, 0.0, 0.5, 1.0)):
+    from harness_rl.benchmarks.base import EnvStub
+    from harness_rl.rl.tree_supo import TreeConfig, tree_supo_rollout
+    from harness_rl.serving.client import StubModel
+
+    st = {"s": 0, "a": 0}
+
+    def r(messages):
+        if messages and "Summarize your progress" in (messages[-1].content or ""):
+            st["s"] += 1
+            return f"SUMMARY {st['s']}"
+        st["a"] += 1
+        return "```bash\nls\n```" if st["a"] % 4 else "TASK_COMPLETE"
+
+    cnt = {"n": 0}
+
+    def hook():
+        cnt["n"] += 1
+        return u_seq[(cnt["n"] - 1) % len(u_seq)]
+
+    cfg = TreeConfig(context_L=600, max_turns=14, max_summaries=6, recency_turns=3,
+                     branch_factor=branch_factor, max_leaves=max_leaves)
+    task = TaskSpec(task_id="stub/tree", benchmark="stub", instruction="demo")
+    env = EnvStub(observations=["obs " + ("token " * 300)] * 40, verify_hook=hook)
+    return tree_supo_rollout(task, env, StubModel(r), cfg, system_prompt="SYS")
+
+
+def test_tree_branches_only_at_summaries_within_budget():
+    t = _tree_stub(branch_factor=2, max_leaves=4)
+    assert t.num_summaries > 0 and len(t.leaves) > 1
+    assert len(t.leaves) <= 4, "max_leaves budget must bound the tree"
+    for n in t.nodes:
+        if len(n.children) > 1:                      # only summary fan-out creates >1 child
+            assert all(t.nodes[c].is_summary for c in n.children), \
+                "branching children must all be summary nodes (no action branching)"
+    # every summary node's siblings share the identical pre-summary context (the GiGPO anchor)
+    for n in t.nodes:
+        sibs = [t.nodes[c] for c in n.children if t.nodes[c].is_summary]
+        if len(sibs) > 1:
+            ctx0 = [(m.role, m.content) for m in sibs[0].seg.context]
+            for s in sibs[1:]:
+                assert [(m.role, m.content) for m in s.seg.context] == ctx0
+
+
+def test_tree_backup_is_subtree_leaf_mean():
+    from harness_rl.rl.tree_reward import tree_backup
+    t = _tree_stub()
+    tree_backup(t)
+    for n in t.nodes:
+        leaves = [t.nodes[i].u_g for i in t.leaves
+                  if not t.nodes[i].hit_limit and _is_desc(t, i, n.id)]
+        if leaves:
+            assert abs(n.value - sum(leaves) / len(leaves)) < 1e-9
+    root = t.nodes[0]
+    assert abs(root.value - sum(t.leaf_u_gs()) / len(t.leaf_u_gs())) < 1e-9
+
+
+def _is_desc(t, node_id, anc_id):
+    cur = node_id
+    while cur is not None:
+        if cur == anc_id:
+            return True
+        cur = t.nodes[cur].parent
+    return False
+
+
+def test_tree_advantages_macro_micro_split():
+    from harness_rl.rl.tree_reward import tree_advantages
+    t = _tree_stub()
+    full, stats = tree_advantages([t], w_micro=1.0)
+    flat, _ = tree_advantages([t], w_micro=0.0)
+    # action nodes are macro-only → unaffected by w_micro; w_micro=0 reduces to flat SUPO
+    for n in t.nodes:
+        if (0, n.id) in full and not n.is_summary:
+            assert abs(full[(0, n.id)] - flat[(0, n.id)]) < 1e-9
+    # at least one summary node differs (its micro term is non-zero)
+    assert any(abs(full[(0, n.id)] - flat[(0, n.id)]) > 1e-9
+               for n in t.nodes if n.is_summary and (0, n.id) in full)
+    # micro is (leave-one-out) zero-sum in sign across a sibling pair
+    for n in t.nodes:
+        sibs = [t.nodes[c] for c in n.children if t.nodes[c].is_summary and t.nodes[c].value is not None]
+        if len(sibs) == 2:
+            m = [full[(0, s.id)] - flat[(0, s.id)] for s in sibs]
+            assert abs(m[0] + m[1]) < 1e-9, "sibling micro terms must cancel"
+    assert stats["n_leaves"] == len(t.leaf_u_gs())
+
+
+def test_tree_samples_carry_precomputed_advantage():
+    from harness_rl.rl.tree_reward import tree_samples
+    t = _tree_stub()
+    samples, stats = tree_samples([t], w_micro=1.0)
+    assert samples and len(samples) == stats["n_scored"]
+    for s in samples:
+        assert "advantage" in s and "reward" not in s      # precomputed advantage, not a reward
+        assert s["group_key"] == "stub/tree" and s["messages"] and isinstance(s["response"], str)
+        assert set(s["category_tokens"]) <= set(("summarization", "thinking", "tool_call"))
+    assert any(s["is_summary"] for s in samples), "summary nodes must be trainable samples"
+    ids = [s["node_id"] for s in samples]
+    assert len(ids) == len(set(ids)), "one sample per node (no shared-prefix double-counting)"
+
+
+def test_tree_overlong_leaf_masked():
+    from harness_rl.rl.tree_reward import tree_backup, tree_samples
+    t = _tree_stub()
+    leaf = t.nodes[t.leaves[0]]
+    leaf.hit_limit = True                      # simulate an overlong (turn/summary-cap) leaf
+    tree_backup(t)
+    assert leaf.value is None, "overlong leaf is excluded from the backup"
+    samples, _ = tree_samples([t], w_micro=1.0)
+    assert leaf.id not in [s["node_id"] for s in samples], "overlong leaf gets no gradient"
+
+
+def test_tree_mask_reasons_separates_turn_cap_from_summary_cap():
+    """max_summaries (real SUPO overlong) vs budget (turn cap, artifact still gradable)."""
+    from harness_rl.rl.tree_reward import tree_samples
+    from harness_rl.rl.tree_supo import TreeConfig, tree_supo_rollout
+    from harness_rl.benchmarks.base import EnvStub
+    from harness_rl.serving.client import StubModel
+
+    def never_submits(messages):
+        if messages and "Summarize your progress" in (messages[-1].content or ""):
+            return "SUMMARY"
+        return "```bash\nls\n```"          # never emits TASK_COMPLETE (like the real 3B)
+
+    def build(mask_reasons):
+        cfg = TreeConfig(context_L=600, max_turns=6, max_summaries=20, recency_turns=3,
+                         branch_factor=2, max_leaves=2, mask_reasons=mask_reasons)
+        env = EnvStub(observations=["obs " + ("token " * 300)] * 40, final_u_g=1.0)
+        return tree_supo_rollout(TaskSpec(task_id="t", benchmark="s", instruction="i"),
+                                 env, StubModel(never_submits), cfg, system_prompt="SYS")
+
+    t_faithful = build(("budget", "max_summaries"))
+    assert all(t_faithful.nodes[i].terminated_reason == "budget" for i in t_faithful.leaves)
+    assert all(t_faithful.nodes[i].hit_limit for i in t_faithful.leaves)
+    s_faithful, st_faithful = tree_samples([t_faithful])
+    assert s_faithful == [] and st_faithful["all_masked"], "faithful masking → zero gradient"
+
+    t_graded = build(("max_summaries",))
+    assert not any(t_graded.nodes[i].hit_limit for i in t_graded.leaves)
+    s_graded, st_graded = tree_samples([t_graded])
+    assert s_graded and not st_graded["all_masked"], "turn-exhausted rollouts become trainable"
+    assert st_graded["n_leaves"] == len(t_graded.leaves)
+
+
+# --- summary leverage (eta^2) diagnostics ---
+
+def test_eta2_undefined_when_k_is_one():
+    from harness_rl.rl.variance import summary_leverage
+    lev = summary_leverage([[[1.0], [0.0]], [[0.5], [1.0]]], n_boot=0)   # K=1 everywhere
+    assert lev["degenerate"] and lev["eta2"] is None
+    assert "K=1" in lev["reason"]
+
+
+def test_eta2_degenerate_when_no_variance():
+    from harness_rl.rl.variance import summary_leverage
+    lev = summary_leverage([[[1.0, 1.0], [1.0, 1.0]]], n_boot=0)
+    assert lev["degenerate"] and "zero total variance" in lev["reason"]
+
+
+def test_eta2_null_baseline_matches_theory_for_m2k2():
+    """E[eta^2 | H0] = df_b/(df_b+df_w); for M=2,K=2 pooled that is 1/3 — NOT 0."""
+    from harness_rl.rl.variance import summary_leverage
+    import random as _r
+    rng = _r.Random(7)
+    mats = [[[rng.gauss(0, 1), rng.gauss(0, 1)], [rng.gauss(0, 1), rng.gauss(0, 1)]]
+            for _ in range(400)]                      # NO true summary effect
+    lev = summary_leverage(mats, n_boot=200, seed=1)
+    assert abs(lev["null_baseline"] - 1 / 3) < 1e-9
+    assert abs(lev["eta2"] - 1 / 3) < 0.05, "biased eta^2 should sit at the null baseline"
+    assert abs(lev["omega2"]) < 0.05, "bias-corrected omega^2 must be ~0 under the null"
+    assert lev["eta2_ci"][0] < lev["eta2"] < lev["eta2_ci"][1]
+
+
+def test_eta2_detects_a_real_summary_effect():
+    from harness_rl.rl.variance import summary_leverage
+    import random as _r
+    rng = _r.Random(11)
+    # summary 0 is genuinely better than summary 1; execution noise is small
+    mats = [[[1.0 + rng.gauss(0, 0.05), 1.0 + rng.gauss(0, 0.05)],
+             [0.0 + rng.gauss(0, 0.05), 0.0 + rng.gauss(0, 0.05)]] for _ in range(50)]
+    lev = summary_leverage(mats, n_boot=200, seed=2)
+    assert lev["eta2"] > 0.95 and lev["omega2"] > 0.9
+    assert lev["eta2"] > lev["null_baseline"]
+    assert lev["F"] > 50
+
+
+def test_macro_advantage_is_sign_only_at_m2_but_graded_at_m4():
+    from harness_rl.rl.variance import macro_advantage_spread
+    two = macro_advantage_spread([[[1.0, 1.0], [0.0, 0.0]], [[0.9, 0.9], [0.1, 0.1]]])
+    assert two["sign_only"] and two["distinct_magnitudes"] == 1
+    assert abs(two["magnitude_mean"] - 1.0) < 1e-4          # collapses to exactly +/-1
+    four = macro_advantage_spread([[[1.0], [0.9], [0.2], [0.0]]])
+    assert four["sign_only"] is False and four["distinct_magnitudes"] > 1
+
+
+def test_reward_matrices_from_trees_feed_eta2():
+    from harness_rl.rl.tree_reward import reward_matrices
+    from harness_rl.rl.variance import summary_leverage
+    t = _tree_stub(branch_factor=2, max_leaves=4)
+    mats = reward_matrices([t])
+    assert mats, "a branched tree must yield at least one M x K matrix"
+    assert all(len(rows) >= 2 for rows in mats), "each anchor contributes >=2 sibling rows"
+    summary_leverage(mats, n_boot=0)                        # must not raise on ragged rows
+
+
+def test_client_chat_many_stub_varies():
+    from harness_rl.serving.client import StubModel
+    st = {"n": 0}
+
+    def r(_m):
+        st["n"] += 1
+        return f"variant {st['n']}"
+    outs = StubModel(r).chat_many([Message(role=Role.USER, content="x")], n=3, temperature=0.9)
+    assert [o.text for o in outs] == ["variant 1", "variant 2", "variant 3"]
 
 
 def test_supo_category_metrics_and_merge():
