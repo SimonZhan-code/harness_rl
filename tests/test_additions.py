@@ -1,6 +1,7 @@
 """Tests for the added benchmarks (LiveCodeBench/SWE-Lite/GameCraft) + G5 memory arch."""
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 
@@ -477,6 +478,102 @@ def test_reward_matrices_from_trees_feed_eta2():
     assert mats, "a branched tree must yield at least one M x K matrix"
     assert all(len(rows) >= 2 for rows in mats), "each anchor contributes >=2 sibling rows"
     summary_leverage(mats, n_boot=0)                        # must not raise on ragged rows
+
+
+# --- trainability audit (A0/A1/A2) + mix-vs-within decomposition (B2) ---
+
+def test_a0_missing_payload_gives_structurally_zero_reward():
+    """THE regression lock: an empty payload silently yields u_g=0 with total_tests=0 for every
+    rollout, which looks exactly like 'the model can't solve anything'."""
+    import warnings
+    from harness_rl.benchmarks import make_benchmark
+    from harness_rl.rl.slime_adapter import _sample_to_task
+
+    bench = make_benchmark("livecodebench")
+    empty = _sample_to_task({"task_id": "lcb/x", "prompt": "solve"}, "livecodebench")
+    assert empty.payload == {}
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        out = bench.make_env(empty).verify()
+    assert out.total_tests == 0 and out.u_g == 0.0
+    assert any("total_tests=0" in str(x.message) for x in w), "must warn, not fail silently"
+
+    good = TaskSpec(task_id="lcb/y", benchmark="livecodebench", instruction="solve",
+                    payload={"private_raw": json.dumps([{"input": "", "output": "hi\n"}])})
+    env = bench.make_env(good)
+    env.reset()
+    open(os.path.join(env.workdir, "solution.py"), "w").write("print('hi')\n")
+    ok = env.verify()
+    assert ok.total_tests == 1 and ok.u_g == 1.0
+
+
+def test_subset_shuffle_and_difficulty_filter():
+    from harness_rl.benchmarks.livecodebench import LiveCodeBenchAdapter
+    a = LiveCodeBenchAdapter()
+    a._cache = [TaskSpec(task_id=f"lcb/{i}", benchmark="livecodebench", instruction="x",
+                         payload={"difficulty": ["easy", "medium", "hard"][i % 3]},
+                         horizon_hint=(i % 3) + 1) for i in range(60)]
+    assert [t.task_id for t in a.subset(5)] == [f"lcb/{i}" for i in range(5)]   # legacy prefix
+    s0, s1 = a.subset(10, shuffle_seed=0), a.subset(10, shuffle_seed=1)
+    assert [t.task_id for t in s0] != [f"lcb/{i}" for i in range(10)], "seed must shuffle"
+    assert [t.task_id for t in s0] != [t.task_id for t in s1], "different seeds differ"
+    assert [t.task_id for t in a.subset(10, shuffle_seed=0)] == [t.task_id for t in s0]  # stable
+    easy = a.subset(50, difficulty="easy")
+    assert easy and all(t.payload["difficulty"] == "easy" for t in easy)
+    em = a.subset(60, difficulty="easy,medium")
+    assert {t.payload["difficulty"] for t in em} == {"easy", "medium"}
+    c = a.difficulty_census()
+    assert c["total"] == 60 and c["difficulty"]["easy"] == 20
+
+
+def test_trainability_audit_flags_masking_not_action_space():
+    from harness_rl.rl.trainability import audit_rollouts
+    from harness_rl.benchmarks.base import EnvStub
+    from harness_rl.rl.supo import SUPORolloutConfig, supo_rollout
+    from harness_rl.serving.client import StubModel
+
+    def never_submits(msgs):
+        if msgs and "Summarize your progress" in (msgs[-1].content or ""):
+            return "SUMMARY"
+        return "```bash\nls\n```"
+
+    def build(mask):
+        cfg = SUPORolloutConfig(context_L=600, max_turns=8, recency_turns=3, mask_reasons=mask)
+        task = TaskSpec(task_id="t", benchmark="stub", instruction="x")
+        return [supo_rollout(task, EnvStub(observations=["obs " + ("tok " * 300)] * 30,
+                                           final_u_g=1.0 if i else 0.0),
+                             StubModel(never_submits), cfg, system_prompt="SYS")
+                for i in range(4)]
+
+    faithful = audit_rollouts(build(("budget", "max_summaries")), ("budget", "max_summaries"))
+    assert faithful["effective_yield"] == 0.0, "budget-masking discards every rollout"
+    assert faithful["u_g_std"] > 0, "reward variance EXISTS — the loss just never sees it"
+    assert faithful["submit_rate"] == 0.0 and faithful["parse_fail_rate"] == 0.0, \
+        "parsing succeeds while submission never happens → termination protocol, not action space"
+
+    graded = audit_rollouts(build(("max_summaries",)), ("max_summaries",))
+    assert graded["effective_yield"] == 1.0, "grading turn-exhausted rollouts restores the signal"
+
+
+def test_mix_vs_within_decomposition_sums_exactly():
+    from harness_rl.rl.metrics import category_shares, decompose_change
+    t0 = {"tokens": {"summarization": 100, "thinking": 100},
+          "entropy": {"summarization": {"mean": 1.0}, "thinking": {"mean": 2.0}}}
+    # composition shifts, per-token entropy identical → aggregate moves with ZERO policy change
+    t1 = {"tokens": {"summarization": 300, "thinking": 100},
+          "entropy": {"summarization": {"mean": 1.0}, "thinking": {"mean": 2.0}}}
+    d = decompose_change(t0, t1, "entropy")
+    assert abs(d["within_total"]) < 1e-12, "no per-token change → within term must vanish"
+    assert d["mix_total"] < 0 and abs(d["aggregate_change"] - d["mix_total"]) < 1e-12
+    assert abs(d["residual"]) < 1e-12, "midpoint weights leave no interaction residual"
+    assert abs(sum(category_shares(t1).values()) - 1.0) < 1e-12
+
+    # pure policy change, composition fixed → all within, no mix
+    t2 = {"tokens": {"summarization": 100, "thinking": 100},
+          "entropy": {"summarization": {"mean": 0.4}, "thinking": {"mean": 2.0}}}
+    d2 = decompose_change(t0, t2, "entropy")
+    assert abs(d2["mix_total"]) < 1e-12 and d2["within_total"] < 0
+    assert abs(d2["aggregate_change"] - (d2["within_total"] + d2["mix_total"])) < 1e-12
 
 
 def test_client_chat_many_stub_varies():

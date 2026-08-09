@@ -116,6 +116,65 @@ def merge_category_metrics(metrics: list[dict]) -> dict:
     return report
 
 
+def category_shares(report: dict) -> dict[str, float]:
+    """B1 — per-category token share s_c (fractions summing to 1) from a merged report."""
+    tokens = report.get("tokens", {})
+    total = sum(tokens.values()) or 1
+    return {c: n / total for c, n in tokens.items()}
+
+
+def decompose_change(report_t0: dict, report_t1: dict, metric: str = "entropy") -> dict:
+    """B2 — split an aggregate entropy/KL change into WITHIN-category and MIX (composition) parts.
+
+    In a multi-category agent the aggregate can move with **no per-token change at all**, purely
+    because the episode's token composition shifted (e.g. proportionally more summarization). So
+    "entropy rose" is uninterpretable until you separate:
+
+        d_agg = SUM_c  s_bar_c * (H_c(t1) - H_c(t0))     <- within: the policy really changed
+              + SUM_c  H_bar_c * (s_c(t1) - s_c(t0))     <- mix:    composition changed
+
+    using midpoint weights (s_bar, H_bar), which makes the two terms sum EXACTLY to the aggregate
+    change (a Törnqvist/mean-value decomposition — no interaction residual left over).
+
+    Returns per-category contributions plus the totals; `residual` is ~0 and is reported only as a
+    numerical check.
+    """
+    s0, s1 = category_shares(report_t0), category_shares(report_t1)
+    m0 = {c: d.get("mean", 0.0) for c, d in (report_t0.get(metric) or {}).items()}
+    m1 = {c: d.get("mean", 0.0) for c, d in (report_t1.get(metric) or {}).items()}
+    cats = sorted(set(s0) | set(s1) | set(m0) | set(m1))
+
+    within, mix = {}, {}
+    for c in cats:
+        s_bar = (s0.get(c, 0.0) + s1.get(c, 0.0)) / 2.0
+        m_bar = (m0.get(c, 0.0) + m1.get(c, 0.0)) / 2.0
+        within[c] = s_bar * (m1.get(c, 0.0) - m0.get(c, 0.0))
+        mix[c] = m_bar * (s1.get(c, 0.0) - s0.get(c, 0.0))
+
+    agg0 = sum(s0.get(c, 0.0) * m0.get(c, 0.0) for c in cats)
+    agg1 = sum(s1.get(c, 0.0) * m1.get(c, 0.0) for c in cats)
+    total = agg1 - agg0
+    w, x = sum(within.values()), sum(mix.values())
+    return {"metric": metric, "aggregate_t0": agg0, "aggregate_t1": agg1, "aggregate_change": total,
+            "within_total": w, "mix_total": x, "residual": total - (w + x),
+            "within": within, "mix": mix, "shares_t0": s0, "shares_t1": s1}
+
+
+def format_decomposition(d: dict) -> str:
+    L = [f"{d['metric']} aggregate {d['aggregate_t0']:.4f} -> {d['aggregate_t1']:.4f} "
+         f"(change {d['aggregate_change']:+.4f})",
+         f"  within-category (policy changed): {d['within_total']:+.4f}",
+         f"  mix (composition changed):        {d['mix_total']:+.4f}",
+         f"  {'category':16} {'within':>10} {'mix':>10} {'share t0':>9} {'share t1':>9}"]
+    for c in sorted(set(d["within"]) | set(d["mix"])):
+        L.append(f"  {c:16} {d['within'].get(c, 0.0):+10.4f} {d['mix'].get(c, 0.0):+10.4f} "
+                 f"{d['shares_t0'].get(c, 0.0):9.3f} {d['shares_t1'].get(c, 0.0):9.3f}")
+    if abs(d["mix_total"]) > abs(d["within_total"]):
+        L.append("  ==> the aggregate moved MOSTLY because token composition shifted, not because "
+                 "the policy's per-token distribution changed. Do not read it as exploration.")
+    return "\n".join(L)
+
+
 def category_entropy_kl_report(segment_stats: list[dict]) -> dict:
     """Batch per-category entropy + KL report — the SUPO training dashboard companion to
     `reward.category_advantage_report` (#1).

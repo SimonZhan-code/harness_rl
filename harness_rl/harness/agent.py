@@ -11,8 +11,8 @@ command, or a line `TASK_COMPLETE` to submit. Malformed output → a reminder ob
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
-from harness_rl.benchmarks.base import Environment
 from harness_rl.gamma.base import BaseContextManager, count_tokens
 from harness_rl.serving.client import ModelClient
 from harness_rl.types import (
@@ -25,6 +25,11 @@ from harness_rl.types import (
     TaskSpec,
     Trace,
 )
+
+if TYPE_CHECKING:  # annotation-only; a runtime import here creates a cycle
+    # harness.agent -> benchmarks/__init__ -> gamecraft -> harness.agent (partially initialised).
+    # The file already uses `from __future__ import annotations`, so the hint stays a string.
+    from harness_rl.benchmarks.base import Environment
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a coding agent operating in a sandboxed environment. You may run shell "

@@ -19,6 +19,7 @@ dev = ["pytest>=8.0", "ruff>=0.5", "mypy>=1.10"]
 hrl-probe = "harness_rl.eval.cli:main"
 hrl-validate = "harness_rl.eval.validate:main"
 hrl-supo-check = "harness_rl.rl.supo_check:main"
+hrl-trainability = "harness_rl.rl.trainability:main"
 
 [build-system]
 requires = ["setuptools>=68"]

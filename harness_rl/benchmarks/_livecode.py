@@ -148,6 +148,18 @@ class LiveCodeExecEnv:
     def verify(self) -> Outcome:
         passed, total = run_tests(self.workdir, self.private_tests, self.fn_name, self.timeout_s)
         u_g = (passed / total) if total else 0.0
+        # A0: `total == 0` means the task carried NO private tests, so u_g is structurally 0 for
+        # every rollout regardless of what the policy did — a silent, total loss of reward signal
+        # that looks exactly like "the model can't solve anything". It happens when the LCB payload
+        # (base64 public_/private_test_cases) fails to survive the trip into the trainer's dataset
+        # rows, since `slime_adapter._sample_to_task` defaults `payload={}`. Make it loud.
+        if total == 0:
+            import warnings
+            warnings.warn(
+                "LiveCodeExecEnv.verify(): total_tests=0 — the task has no private tests, so u_g is "
+                "structurally 0.0 and this rollout carries NO learning signal. Check that the task "
+                "payload ('private_raw') reached make_env; see rl/trainability.py.",
+                RuntimeWarning, stacklevel=2)
         return Outcome(u_g=u_g, passed_tests=passed, total_tests=total,
                        terminated_reason="submit" if self._submitted else "budget")
 
